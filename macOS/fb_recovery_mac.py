@@ -1401,23 +1401,58 @@ class FBHackedRecoveryTool(tk.Tk):
         self._results_window = self.results_canvas.create_window(
             (0, 0), window=self.results_frame, anchor="nw"
         )
-        self.results_frame.bind(
-            "<Configure>",
-            lambda e: self.results_canvas.configure(
-                scrollregion=self.results_canvas.bbox("all")
-            )
-        )
         self.results_canvas.bind(
             "<Configure>",
             lambda e: self.results_canvas.itemconfig(
                 self._results_window, width=e.width
             )
         )
-        # Mouse wheel / trackpad scroll — macOS dùng event.delta trực tiếp
-        def _scroll(e):
-            self.results_canvas.yview_scroll(int(-1 * e.delta), "units")
-        # Bind lên toàn bộ app để trackpad hoạt động khi hover bất kỳ đâu trong panel
-        self.bind_all("<MouseWheel>", _scroll)
+        # Mouse wheel scroll cho results panel
+        def _scroll_results(e):
+            # macOS: delta là pixels trực tiếp (trackpad), Windows: bội của 120
+            delta = e.delta
+            if abs(delta) >= 100:
+                # Windows / macOS đơn vị lớn
+                units = int(-1 * delta / 120)
+            else:
+                # macOS trackpad — delta nhỏ, dùng trực tiếp
+                units = int(-1 * delta) if delta != 0 else 0
+            if units != 0:
+                self.results_canvas.yview_scroll(units, "units")
+
+        def _results_enter(e):
+            self.bind_all("<MouseWheel>", _scroll_results)
+
+        def _results_leave(e):
+            # Chỉ unbind nếu chuột thực sự ra ngoài vùng canvas
+            rx = self.results_canvas.winfo_rootx()
+            ry = self.results_canvas.winfo_rooty()
+            rw = self.results_canvas.winfo_width()
+            rh = self.results_canvas.winfo_height()
+            mx, my = self.winfo_pointerx(), self.winfo_pointery()
+            if not (rx <= mx <= rx + rw and ry <= my <= ry + rh):
+                self.unbind_all("<MouseWheel>")
+
+        self.results_canvas.bind("<Enter>", _results_enter)
+        self.results_canvas.bind("<Leave>", _results_leave)
+        self.results_frame.bind("<Enter>", _results_enter)
+
+        # Bind scroll vào child widgets mới được thêm vào sau
+        def _bind_children_scroll(widget):
+            try:
+                widget.bind("<Enter>", _results_enter)
+                for c in widget.winfo_children():
+                    _bind_children_scroll(c)
+            except Exception:
+                pass
+        # Hook vào results_frame Configure để bind children khi row mới thêm vào
+        self.results_frame.bind(
+            "<Configure>",
+            lambda e: (
+                self.results_canvas.configure(scrollregion=self.results_canvas.bbox("all")),
+                _bind_children_scroll(self.results_frame)
+            )
+        )
 
         # Header row in results
         hdr = tk.Frame(self.results_frame, bg="#181825")
@@ -1506,6 +1541,14 @@ class FBHackedRecoveryTool(tk.Tk):
             insertbackground="#cdd6f4",
         )
         self.log_box.pack(fill="x", pady=(4, 0))
+
+        # Khi hover log → unbind scroll results, để log tự scroll bình thường
+        def _on_enter_log(e):
+            self.unbind_all("<MouseWheel>")
+        def _on_leave_log(e):
+            pass  # results sẽ tự bind lại khi chuột vào
+        self.log_box.bind("<Enter>", _on_enter_log)
+        self.log_box.bind("<Leave>", _on_leave_log)
 
     # ------------------------------------------------------------------
     # VPS Panel methods (Termius-style)
@@ -1967,32 +2010,48 @@ class FBHackedRecoveryTool(tk.Tk):
             except Exception:
                 pass
 
-            import threading, tempfile, shutil
-            def _open(url=current_url, px=proxy_str, pdir=profile_dir, em=email):
+            # Lấy cookies từ driver để inject vào Chrome mới
+            try:
+                cookies = list(w.driver.get_cookies())
+            except Exception:
+                cookies = []
+
+            import threading, tempfile
+            def _open(url=current_url, px=proxy_str, cks=cookies, em=email):
                 try:
                     from selenium import webdriver as wd
                     from selenium.webdriver.chrome.options import Options as COptions
                     from selenium.webdriver.chrome.service import Service as CService
 
-                    SKIP = {"SingletonLock", "SingletonSocket", "SingletonCookie",
-                            "RunningChromeVersion", ".com.google.Chrome.locked"}
-
+                    view_dir = tempfile.mkdtemp(prefix="fb_view_")
                     opts = COptions()
-                    if pdir and os.path.isdir(pdir):
-                        view_dir = tempfile.mkdtemp(prefix="fb_view_")
-                        # Copy profile, bỏ qua các lock/socket files
-                        shutil.copytree(
-                            pdir, view_dir, dirs_exist_ok=True,
-                            ignore=shutil.ignore_patterns(*SKIP)
-                        )
-                        opts.add_argument(f"--user-data-dir={view_dir}")
-                    else:
-                        opts.add_argument(f"--user-data-dir={tempfile.mkdtemp(prefix='fb_view_')}")
+                    opts.add_argument(f"--user-data-dir={view_dir}")
                     opts.add_argument("--no-first-run")
                     opts.add_argument("--no-default-browser-check")
+                    opts.add_argument("--disable-blink-features=AutomationControlled")
                     if px:
-                        opts.add_argument(f"--proxy-server={px}")
+                        if px.startswith("socks5://"):
+                            # SSH tunnel — dùng trực tiếp
+                            opts.add_argument(f"--proxy-server={px}")
+                        else:
+                            # HTTP proxy có thể có auth (host:port:user:pass)
+                            ext_dir = w._make_proxy_extension(px) if hasattr(w, '_make_proxy_extension') else None
+                            if ext_dir:
+                                opts.add_argument(f"--load-extension={ext_dir}")
+                            else:
+                                opts.add_argument(f"--proxy-server={px}")
                     drv = wd.Chrome(service=CService(), options=opts)
+                    # Navigate facebook trước để set đúng domain
+                    drv.get("https://www.facebook.com")
+                    # Inject cookies
+                    for ck in cks:
+                        try:
+                            ck.pop("sameSite", None)
+                            ck.pop("expiry", None)
+                            drv.add_cookie(ck)
+                        except Exception:
+                            pass
+                    # Navigate đến URL đích
                     drv.get(url)
                     # Không quit — Chrome ở lại cho user dùng
                 except Exception as ex:
