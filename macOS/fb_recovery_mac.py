@@ -1670,18 +1670,24 @@ class FBHackedRecoveryTool(tk.Tk):
     # ------------------------------------------------------------------
     def _update_stats(self):
         """Refresh all stats vars from current state."""
+        # Tổng dựa trên accounts hiện tại trong textbox (bỏ qua những gì đã bị xóa)
+        current_accounts = set(self._parse_accounts())
+        # Chỉ đếm success emails vẫn còn trong danh sách
+        active_success = self._success_emails & current_accounts if current_accounts else self._success_emails
+        total = len(current_accounts) if current_accounts else (self._total_accounts or len(self._workers))
+
         with self._lock:
             running = sum(
                 1 for w in self._workers
                 if w.is_alive() and w.email not in self._success_emails
             )
-            success = len(self._success_emails)
+            success = len(active_success)
             failed = sum(
                 1 for w in self._workers
                 if not w.is_alive() and w.email not in self._success_emails
+                and w.email in current_accounts
             )
 
-        total = self._total_accounts if self._total_accounts > 0 else len(self._workers)
         pending = max(0, total - running - success - failed)
         self._stats_vars["total"].set(str(total))
         self._stats_vars["running"].set(str(running))
@@ -1786,6 +1792,13 @@ class FBHackedRecoveryTool(tk.Tk):
             f"proxy pool: {len(pool.proxies)} entries | "
             f"vps pool: {len(vps_list)} servers"
         )
+
+        # Xóa khỏi _success_emails những email không còn trong danh sách nữa
+        accounts_set = set(accounts)
+        removed = self._success_emails - accounts_set
+        for em in removed:
+            self._success_emails.discard(em)
+            self._success_worker_info.pop(em, None)
 
         stop_event = threading.Event()
 
