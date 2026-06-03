@@ -1056,6 +1056,8 @@ class FBHackedRecoveryTool(tk.Tk):
         self._success_emails: set = set()  # emails đã SUCCESS — Chrome giữ nguyên
         self._success_worker_info: dict = {}  # email → {driver, proxy, tunnel, url} — giữ sau STOP
         self._lock = threading.Lock()
+        self._loop_active = False   # True khi đang chạy vòng lặp vô hạn
+        self._loop_stop = threading.Event()  # set() để dừng vòng lặp
 
         # VPS list: list of dict {host, user, key, status}
         self._vps_list: list = []
@@ -1812,6 +1814,10 @@ class FBHackedRecoveryTool(tk.Tk):
             if not w.is_alive():
                 w.start()
 
+        # Bật vòng lặp vô hạn
+        self._loop_active = True
+        self._loop_stop.clear()
+
         # Monitor completion in background
         threading.Thread(target=self._monitor, daemon=True).start()
 
@@ -1820,14 +1826,37 @@ class FBHackedRecoveryTool(tk.Tk):
 
     # ------------------------------------------------------------------
     def _monitor(self):
-        # Periodically update stats while workers are running
-        while any(w.is_alive() for w in self._workers):
+        """Chạy workers, khi xong tự restart nếu _loop_active=True."""
+        while True:
+            # Chờ tất cả workers kết thúc
+            while any(w.is_alive() for w in self._workers):
+                self.after(0, self._update_stats)
+                time.sleep(1)
             self.after(0, self._update_stats)
-            time.sleep(1)
-        self.after(0, self._update_stats)
+
+            # Nếu user đã bấm STOP → thoát vòng lặp
+            if not self._loop_active or self._loop_stop.is_set():
+                break
+
+            # Tự động restart: chờ 2s rồi start lại
+            time.sleep(2)
+            if not self._loop_active or self._loop_stop.is_set():
+                break
+            self.after(0, self._restart_round)
+
+    # ------------------------------------------------------------------
+    def _restart_round(self):
+        """Gọi lại start_threads để chạy vòng mới — được gọi từ _monitor."""
+        if self._loop_active and not self._loop_stop.is_set():
+            self._log_append("[LOOP] Restarting round...")
+            self.start_threads()
 
     # ------------------------------------------------------------------
     def stop_all(self):
+        # Dừng vòng lặp vô hạn
+        self._loop_active = False
+        self._loop_stop.set()
+
         self._log_append("[STOP] Stopping all workers...")
         for w in self._workers:
             w._stop.set()
