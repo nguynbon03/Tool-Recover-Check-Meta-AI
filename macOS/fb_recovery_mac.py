@@ -1790,6 +1790,9 @@ class FBHackedRecoveryTool(tk.Tk):
         stop_event = threading.Event()
 
         for idx, email in enumerate(accounts):
+            # Bỏ qua email đã SUCCESS — Chrome của họ vẫn đang mở, không được đụng vào
+            if email in self._success_emails:
+                continue
             self._add_result_row(email, "WAITING")
             w = AccountWorker(
                 email=email,
