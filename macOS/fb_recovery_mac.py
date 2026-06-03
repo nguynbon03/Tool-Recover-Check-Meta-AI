@@ -465,15 +465,14 @@ class AccountWorker(threading.Thread):
                     self._semaphore.release()
 
             if success:
-                # KHÔNG dừng screenshot — tiếp tục update thumbnail khi SUCCESS
-                # KHÔNG tự show Chrome — user click thumbnail để xem
+                # SUCCESS — không bao giờ tắt bất cứ thứ gì
                 self.callbacks["result"](self.email, "SUCCESS")
                 self.callbacks["success_keep"](self.email)
-                # Chạy tiếp screenshot loop cho đến khi user nhấn STOP
-                while not self._stop.is_set():
-                    time.sleep(5)
-                self._stop_screenshot_thread()
-                return
+                # Giữ driver + tunnel + screenshot mãi mãi — không tắt dù STOP ALL
+                # Chrome view của user hoàn toàn độc lập, không bị đụng
+                while True:
+                    time.sleep(30)  # sleep vô hạn, không bao giờ thoát
+                # (unreachable — SUCCESS worker không bao giờ kết thúc)
 
             if not self._stop.is_set():
                 self.callbacks["log"](self.email, f"[RETRY] Chờ 15s trước lần thử {self._attempt + 1}...")
