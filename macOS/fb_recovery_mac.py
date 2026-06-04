@@ -2183,9 +2183,8 @@ class FBHackedRecoveryTool(tk.Tk):
 
     # ------------------------------------------------------------------
     def _add_result_row(self, email: str, status: str):
-        row = tk.Frame(self.results_frame, bg="#181825", height=32)
-        row.pack(fill="x", padx=4, pady=0)
-        row.pack_propagate(False)
+        row = tk.Frame(self.results_frame, bg="#181825")
+        row.pack(fill="x", padx=4, pady=1)
 
         icon_map = {
             "SUCCESS": "✅",
@@ -2225,8 +2224,8 @@ class FBHackedRecoveryTool(tk.Tk):
         )
         lbl.pack(side="right")
 
-        # Thumbnail — nhỏ, click để mở popup full
-        thumb_lbl = tk.Label(row, bg="#181825", width=18, height=2, cursor="hand2")
+        # Thumbnail — hiện screenshot nhỏ, click để mở popup full
+        thumb_lbl = tk.Label(row, bg="#181825", width=20, height=5, cursor="hand2")
         thumb_lbl.pack(side="right", padx=(0, 4))
         thumb_lbl.bind("<Button-1>", lambda e, em=email: self._on_thumbnail_click(em))
 
