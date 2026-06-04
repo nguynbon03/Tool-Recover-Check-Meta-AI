@@ -1656,24 +1656,30 @@ class FBHackedRecoveryTool(tk.Tk):
                 self._results_window, width=e.width
             )
         )
-        # Mouse wheel scroll — bind_all + walk parent tree dùng widget identity
-        def _scroll_results(e):
-            w = e.widget
-            try:
-                while w is not None:
-                    if w is results_container:
-                        delta = e.delta
-                        if delta == 0:
-                            return
-                        units = int(-1 * delta / 120) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
-                        self.results_canvas.yview_scroll(units, "units")
-                        return "break"
-                    w = w.master
-            except Exception:
-                pass
+        # Mouse wheel scroll — bind_all + hover guard
+        _results_hover = [False]
 
-        self._results_scroll_fn = _scroll_results
+        def _scroll_results(e):
+            if not _results_hover[0]:
+                return
+            delta = e.delta
+            if delta == 0:
+                return
+            units = int(-1 * delta / 120) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
+            self.results_canvas.yview_scroll(units, "units")
+
+        def _on_results_enter(e):
+            _results_hover[0] = True
+
+        def _on_results_leave(e):
+            _results_hover[0] = False
+
         self.bind_all("<MouseWheel>", _scroll_results)
+
+        # Tất cả widget trong vùng results đều giữ hover — kể cả scrollbar
+        for _w in (self.results_canvas, self.results_frame, results_container, results_scroll):
+            _w.bind("<Enter>", _on_results_enter)
+            _w.bind("<Leave>", _on_results_leave)
 
         def _on_results_configure(e):
             self.results_canvas.configure(scrollregion=self.results_canvas.bbox("all"))
