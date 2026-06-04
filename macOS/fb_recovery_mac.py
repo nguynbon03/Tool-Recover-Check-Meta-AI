@@ -2357,14 +2357,16 @@ class FBHackedRecoveryTool(tk.Tk):
                 cur_url = drv.current_url
                 cookies = drv.get_cookies()
 
-                # Chrome visible — default size (không set window-size, để Chrome tự quyết)
+                # Chrome visible — cùng config với headless để session đồng bộ
                 vis_options = Options()
                 vis_options.add_argument(f"user-agent={DESKTOP_UA}")
+                vis_options.add_argument("--window-size=1280,900")
                 vis_options.add_argument("--disable-blink-features=AutomationControlled")
                 vis_options.add_argument("--lang=en-US")
                 vis_options.add_argument("--no-first-run")
                 vis_options.add_argument("--no-default-browser-check")
                 vis_options.add_argument("--disable-notifications")
+                vis_options.add_argument("--disable-features=Translate")
                 vis_options.add_experimental_option("excludeSwitches", ["enable-automation"])
                 vis_options.add_experimental_option("useAutomationExtension", False)
 
@@ -2395,6 +2397,12 @@ class FBHackedRecoveryTool(tk.Tk):
                     except Exception:
                         pass
                 vis_drv.get(cur_url)
+                time.sleep(2)
+                # Maximize để user thao tác dễ dàng
+                try:
+                    vis_drv.maximize_window()
+                except Exception:
+                    pass
 
                 with self._lock:
                     self._view_drivers[email] = vis_drv
