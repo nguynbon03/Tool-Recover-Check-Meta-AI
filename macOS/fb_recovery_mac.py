@@ -2092,8 +2092,9 @@ class FBHackedRecoveryTool(tk.Tk):
             except Exception:
                 cookies = []
 
-            def _show(url=current_url, px=proxy_str, pdir=profile_dir, cks=cookies, em=email, sdir=save_dir):
+            def _show(url=current_url, px=proxy_str, cks=cookies, em=email, sdir=save_dir):
                 try:
+                    import tempfile as _tmp
                     from selenium import webdriver as wd
                     from selenium.webdriver.chrome.options import Options as COptions
                     from selenium.webdriver.chrome.service import Service as CService
@@ -2106,16 +2107,15 @@ class FBHackedRecoveryTool(tk.Tk):
                         except Exception:
                             pass
 
-                    # Dùng profile_dir của Chrome headless đang chạy nếu có
-                    use_dir = pdir if (pdir and os.path.isdir(pdir)) else sdir
+                    # Profile sạch riêng cho Chrome view — KHÔNG dùng profile headless
+                    # (headless đang chạy và lock profile, dùng chung sẽ crash)
+                    view_dir = _tmp.mkdtemp(prefix="fb_view_")
 
                     opts = COptions()
-                    opts.add_argument(f"--user-data-dir={use_dir}")
+                    opts.add_argument(f"--user-data-dir={view_dir}")
                     opts.add_argument("--no-first-run")
                     opts.add_argument("--no-default-browser-check")
                     opts.add_argument("--disable-blink-features=AutomationControlled")
-                    # detach=True: Chrome tồn tại độc lập, không bị kill khi tool đóng
-                    # detach removed — dùng LSUIElement ẩn Dock icon thay thế
 
                     if px:
                         if px.startswith("socks5://"):
@@ -2127,49 +2127,24 @@ class FBHackedRecoveryTool(tk.Tk):
                             else:
                                 opts.add_argument(f"--proxy-server={px}")
 
-                    # Kill toàn bộ Chrome headless + chromedriver — giải phóng profile lock
-                    import time as _t, signal as _sig
-                    killed_pids = []
-                    try:
-                        # Tìm Chrome child process của chromedriver
-                        drv_pid = w.driver.service.process.pid
-                        r2 = subprocess.run(["pgrep", "-P", str(drv_pid)], capture_output=True, text=True)
-                        for cpid in r2.stdout.strip().split():
-                            if cpid:
-                                try:
-                                    subprocess.run(["kill", "-9", cpid], capture_output=True)
-                                    killed_pids.append(cpid)
-                                except Exception:
-                                    pass
-                    except Exception:
-                        pass
-                    try:
-                        w.driver.service.process.kill()
-                    except Exception:
-                        pass
-                    # Đặt driver=None để worker không dùng nữa
-                    try:
-                        w.driver = None
-                    except Exception:
-                        pass
+                    # Mở Chrome thường với profile sạch + proxy đúng
+                    drv = wd.Chrome(service=CService(), options=opts)
 
-                    # Chờ Chrome headless chết hoàn toàn và giải phóng SingletonLock
-                    _t.sleep(2.0)
-
-                    # Xóa SingletonLock/Socket nếu còn sót lại
-                    for lock_f in ["SingletonLock", "SingletonSocket", "SingletonCookie"]:
-                        lp = os.path.join(use_dir, lock_f)
+                    # Inject cookies từ headless → Chrome view có cùng session
+                    drv.get("https://www.facebook.com")
+                    for ck in cks:
                         try:
-                            if os.path.exists(lp):
-                                os.remove(lp)
+                            ck2 = {k: v for k, v in ck.items()
+                                   if k not in ("sameSite", "expiry")}
+                            drv.add_cookie(ck2)
                         except Exception:
                             pass
 
-                    # Mở Chrome thường với ĐÚNG profile đó — 1 Chrome duy nhất
-                    drv = wd.Chrome(service=CService(), options=opts)
+                    # Navigate đến đúng URL — phiên hoàn toàn đồng bộ với headless
+                    drv.get(url)
+
                     # Lưu driver để có thể kill khi click lại
                     self._view_drivers[em] = drv
-                    drv.get(url)
                     # Chrome ở lại cho user — tool không can thiệp gì nữa
 
                 except Exception as ex:
