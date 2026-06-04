@@ -876,13 +876,60 @@ chrome.webRequest.onAuthRequired.addListener(
 
         # 5. Check support button — delay 10s rồi mới tắt nếu không có
         time.sleep(3)
+
+        # Bail-out sớm nếu trang đang ở trạng thái "không tìm thấy account"
+        if self._is_failure_page():
+            self.callbacks["log"](self.email, "[FAIL] No search results / account not found page — skip")
+            return False
+
         if self._check_support_button():
             return True
         # Đợi thêm 10s (tổng ~13s) trước khi kết luận không có Get Support
         time.sleep(10)
+
+        if self._is_failure_page():
+            self.callbacks["log"](self.email, "[FAIL] No search results (confirmed) — skip")
+            return False
+
         if self._check_support_button():
             return True
 
+        return False
+
+    def _is_failure_page(self) -> bool:
+        """Trả về True nếu trang đang hiển thị lỗi 'không tìm thấy account' hoặc trang đầu vào."""
+        driver = self.driver
+        if not driver:
+            return False
+        try:
+            src = driver.page_source or ""
+            url = driver.current_url or ""
+            # Trang "No search results" — Facebook trả về trang tìm kiếm lại
+            failure_texts = [
+                "No search results",
+                "no search results",
+                "couldn't find your account",
+                "We couldn't find your account",
+                "Couldn't Find Your Account",
+                "We didn't find any accounts",
+                "no accounts found",
+                "Không tìm thấy tài khoản",
+                "không tìm thấy tài khoản nào",
+                "Enter your mobile number or email address",  # vẫn ở trang input = chưa submit
+                "Mobile number or email address",  # input placeholder còn đó = trang identify
+            ]
+            # Nếu vẫn ở URL identify (chưa move forward) → coi là fail
+            if "identify" in url and "recover" not in url and "hacked" not in url:
+                # Chỉ fail nếu đang hiện lỗi "no results", không fail nếu đang ở bước identify hợp lệ
+                for t in failure_texts[:6]:
+                    if t.lower() in src.lower():
+                        return True
+                return False
+            for t in failure_texts[:6]:
+                if t.lower() in src.lower():
+                    return True
+        except Exception:
+            pass
         return False
 
     # ------------------------------------------------------------------
