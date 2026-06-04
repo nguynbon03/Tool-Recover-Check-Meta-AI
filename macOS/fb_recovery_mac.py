@@ -2201,7 +2201,7 @@ class FBHackedRecoveryTool(tk.Tk):
                 finally:
                     self._view_opening.discard(em)
 
-            threading.Thread(target=_show, daemon=False).start()
+            threading.Thread(target=_show, daemon=True).start()
             self._log_append(f"[Chrome] Showing session: {email[:25]}")
         except Exception as e:
             self._view_opening.discard(email)
