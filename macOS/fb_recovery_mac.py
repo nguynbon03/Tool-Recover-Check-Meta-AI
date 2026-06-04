@@ -1955,21 +1955,8 @@ class FBHackedRecoveryTool(tk.Tk):
                     row_data[0].master.destroy()  # destroy Frame chứa row
                 except Exception:
                     pass
-            # Nếu là SUCCESS, kill driver và cleanup
-            if em in self._success_emails:
-                old_w = self._success_worker_info.get(em, {}).get("worker")
-                if old_w:
-                    try: old_w._stop.set()
-                    except Exception: pass
-                    try: old_w._safe_quit()
-                    except Exception: pass
-                self._success_emails.discard(em)
-                self._success_worker_info.pop(em, None)
-                if hasattr(self, '_success_popups'):
-                    p = self._success_popups.pop(em, None)
-                    if p:
-                        try: p.destroy()
-                        except Exception: pass
+            # SUCCESS worker: KHÔNG đụng vào — Chrome đang mở, user đang làm việc
+            # Chỉ xóa result row UI, giữ nguyên driver/tunnel/popup
         if rows_to_remove:
             self.after(100, self._update_stats)
 
@@ -2051,29 +2038,7 @@ class FBHackedRecoveryTool(tk.Tk):
         # Luật: khi START với list mới, clear TẤT CẢ SUCCESS cũ
         # Không lưu luyến — đã xử lý xong thì dứt điểm, không để headless Chrome chạy mãi
         accounts_set = set(accounts)
-        # Kill headless Chrome của các SUCCESS cũ không còn trong list
-        removed = self._success_emails - accounts_set
-        for em in removed:
-            old_w = self._success_worker_info.get(em, {}).get("worker")
-            if old_w:
-                try:
-                    old_w._stop.set()
-                except Exception:
-                    pass
-                try:
-                    old_w._safe_quit()
-                except Exception:
-                    pass
-            self._success_emails.discard(em)
-            self._success_worker_info.pop(em, None)
-            # Đóng popup nếu còn mở
-            if hasattr(self, '_success_popups'):
-                p = self._success_popups.pop(em, None)
-                if p:
-                    try:
-                        p.destroy()
-                    except Exception:
-                        pass
+        # SUCCESS workers không bao giờ bị kill — Chrome của họ độc lập với list
 
         stop_event = threading.Event()
 
