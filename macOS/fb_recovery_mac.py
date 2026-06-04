@@ -2329,22 +2329,29 @@ class FBHackedRecoveryTool(tk.Tk):
                 popup.after(0, _quick_refresh)
             threading.Thread(target=_do, daemon=True).start()
 
-        # --- Scroll forwarding ---
+        # --- Scroll forwarding — dùng tọa độ chuột thật ---
         def _on_scroll(event):
             delta = event.delta
-            scroll_px = -int(delta / 5) if abs(delta) >= 60 else (-20 if delta > 0 else 20)
-            def _do():
+            # macOS trackpad: delta nhỏ, scale lên. Chuột: delta=120 per notch
+            if abs(delta) >= 60:
+                scroll_px = -int(delta / 3)
+            else:
+                scroll_px = -delta * 8
+            # Map tọa độ chuột → browser coords
+            bx2, by2 = _to_browser_coords(event)
+            if bx2 is None:
+                bx2 = _state["browser_w"] // 2
+                by2 = _state["browser_h"] // 2
+            def _do(bx=bx2, by=by2, sp=scroll_px):
                 try:
-                    bx2 = _state["browser_w"] // 2
-                    by2 = _state["browser_h"] // 2
                     worker.driver.execute_cdp_cmd("Input.dispatchMouseEvent", {
                         "type": "mouseWheel",
-                        "x": bx2, "y": by2,
-                        "deltaX": 0, "deltaY": scroll_px,
+                        "x": bx, "y": by,
+                        "deltaX": 0, "deltaY": sp,
                     })
                 except Exception:
                     try:
-                        worker.driver.execute_script(f"window.scrollBy(0,{scroll_px})")
+                        worker.driver.execute_script(f"window.scrollBy(0,{sp})")
                     except Exception:
                         pass
                 popup.after(0, _quick_refresh)
