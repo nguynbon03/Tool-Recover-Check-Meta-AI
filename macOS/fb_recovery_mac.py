@@ -1840,12 +1840,32 @@ class FBHackedRecoveryTool(tk.Tk):
             f"vps pool: {len(vps_list)} servers"
         )
 
-        # Xóa khỏi _success_emails những email không còn trong danh sách nữa
+        # Luật: khi START với list mới, clear TẤT CẢ SUCCESS cũ
+        # Không lưu luyến — đã xử lý xong thì dứt điểm, không để headless Chrome chạy mãi
         accounts_set = set(accounts)
+        # Kill headless Chrome của các SUCCESS cũ không còn trong list
         removed = self._success_emails - accounts_set
         for em in removed:
+            old_w = self._success_worker_info.get(em, {}).get("worker")
+            if old_w:
+                try:
+                    old_w._stop.set()
+                except Exception:
+                    pass
+                try:
+                    old_w._safe_quit()
+                except Exception:
+                    pass
             self._success_emails.discard(em)
             self._success_worker_info.pop(em, None)
+            # Đóng popup nếu còn mở
+            if hasattr(self, '_success_popups'):
+                p = self._success_popups.pop(em, None)
+                if p:
+                    try:
+                        p.destroy()
+                    except Exception:
+                        pass
 
         stop_event = threading.Event()
 
