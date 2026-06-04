@@ -874,16 +874,19 @@ chrome.webRequest.onAuthRequired.addListener(
         else:
             self.callbacks["log"](self.email, f"[4] Skip — not on recover page")
 
-        # 5. Check support button — delay 10s rồi mới tắt nếu không có
+        # 5. Check support button — chỉ sau khi đã qua bước identify
         time.sleep(3)
 
-        # Bail-out sớm nếu trang đang ở trạng thái "không tìm thấy account"
-        if self._is_failure_page():
-            self.callbacks["log"](self.email, "[FAIL] No search results / account not found page — skip")
+        # Bail-out ngay nếu vẫn còn ở trang identify (chưa tìm thấy account)
+        cur_url = driver.current_url
+        still_on_identify = "identify" in cur_url and "/recover" not in cur_url
+        if still_on_identify or self._is_failure_page():
+            self.callbacks["log"](self.email, f"[FAIL] Stuck on identify/no-results — account not found. URL: {cur_url}")
             return False
 
         if self._check_support_button():
             return True
+
         # Đợi thêm 10s (tổng ~13s) trước khi kết luận không có Get Support
         time.sleep(10)
 
@@ -2180,8 +2183,9 @@ class FBHackedRecoveryTool(tk.Tk):
 
     # ------------------------------------------------------------------
     def _add_result_row(self, email: str, status: str):
-        row = tk.Frame(self.results_frame, bg="#181825")
-        row.pack(fill="x", padx=4, pady=1)
+        row = tk.Frame(self.results_frame, bg="#181825", height=32)
+        row.pack(fill="x", padx=4, pady=0)
+        row.pack_propagate(False)
 
         icon_map = {
             "SUCCESS": "✅",
@@ -2221,8 +2225,8 @@ class FBHackedRecoveryTool(tk.Tk):
         )
         lbl.pack(side="right")
 
-        # Thumbnail
-        thumb_lbl = tk.Label(row, bg="#181825", width=20, height=5, cursor="hand2")
+        # Thumbnail — nhỏ, click để mở popup full
+        thumb_lbl = tk.Label(row, bg="#181825", width=18, height=2, cursor="hand2")
         thumb_lbl.pack(side="right", padx=(0, 4))
         thumb_lbl.bind("<Button-1>", lambda e, em=email: self._on_thumbnail_click(em))
 
