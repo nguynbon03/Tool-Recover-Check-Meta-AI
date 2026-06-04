@@ -42,23 +42,44 @@ RECOVERY_URL = (
 )
 
 SUPPORT_JS = """
-const targets = ["Nhận hỗ trợ","Get support","Get Support","Contact support",
-                 "Liên hệ hỗ trợ","Chat với AI","Chat with AI"];
-const els = document.querySelectorAll("button,a,div[role='button'],span,div");
+// Detect ANY visible interactive element at bottom-right of viewport
+const vw = window.innerWidth || document.documentElement.clientWidth;
+const vh = window.innerHeight || document.documentElement.clientHeight;
+const ZONE_X = vw * 0.6;   // right 40% of screen
+const ZONE_Y = vh * 0.6;   // bottom 40% of screen
+
+const textTargets = ["nhận hỗ trợ","get support","contact support",
+                     "liên hệ hỗ trợ","chat với ai","chat with ai",
+                     "help","hỗ trợ","support"];
+const els = document.querySelectorAll(
+    "button,a,div[role='button'],div[role='dialog'],span[role='button']," +
+    "[data-testid],[aria-label],[class*='support'],[class*='help'],[class*='chat']"
+);
+let best = null;
 for (const el of els) {
-    const txt = (el.innerText||'').trim();
-    if (txt.length > 90) continue;
+    const txt = (el.innerText || el.getAttribute('aria-label') || '').trim();
+    if (txt.length > 120) continue;
     const rect = el.getBoundingClientRect();
-    if (rect.width===0||rect.height===0) continue;
+    if (rect.width === 0 || rect.height === 0) continue;
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
     const style = getComputedStyle(el);
-    if (style.display==='none'||style.visibility==='hidden'||style.opacity==='0') continue;
-    if (el.closest('#pageFooter,footer')) continue;
-    for (const t of targets) {
-        if (txt.toLowerCase()===t.toLowerCase()||txt.toLowerCase().includes(t.toLowerCase()))
-            return txt;
+    if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) < 0.1) continue;
+    if (el.closest('#pageFooter,footer,[role="navigation"]')) continue;
+    // Ưu tiên: text match
+    const low = txt.toLowerCase();
+    for (const t of textTargets) {
+        if (low.includes(t)) return txt || ("button@" + Math.round(cx) + "x" + Math.round(cy));
+    }
+    // Fallback: bất kỳ element clickable ở góc dưới phải
+    if (cx >= ZONE_X && cy >= ZONE_Y) {
+        const tag = el.tagName.toLowerCase();
+        if (tag === 'button' || tag === 'a' || el.getAttribute('role') === 'button') {
+            best = best || (txt || tag + "@" + Math.round(cx) + "x" + Math.round(cy));
+        }
     }
 }
-return null;
+return best;
 """
 
 
@@ -332,6 +353,14 @@ class FingerprintProfile:
     HW_CONCURRENCY = [2, 4, 4, 8, 8, 8, 16]
     DEVICE_MEMORY = [2, 4, 4, 8, 8]
     TIMEZONES = ["Asia/Ho_Chi_Minh","Asia/Singapore","Asia/Bangkok","Asia/Manila","America/New_York","Europe/London"]
+    FONT_LIST = [
+        "Arial","Arial Black","Arial Narrow","Calibri","Cambria","Comic Sans MS",
+        "Courier New","Georgia","Impact","Lucida Console","Lucida Sans Unicode",
+        "Microsoft Sans Serif","MS Gothic","MS PGothic","Palatino Linotype",
+        "Segoe UI","Segoe UI Light","Segoe UI Semibold","Tahoma","Times New Roman",
+        "Trebuchet MS","Verdana","Wingdings","Wingdings 2","Wingdings 3",
+        "Marlett","Symbol","Webdings","Consolas","Candara",
+    ]
 
     def __init__(self, email: str):
         seed_bytes = hashlib.md5(email.encode()).digest()
@@ -350,6 +379,15 @@ class FingerprintProfile:
     def generate(self) -> dict:
         screen = self._pick(self.SCREENS)
         gpu = self._pick(self.GPU_LIST)
+        # Deterministic font shuffle per nick
+        fonts = list(self.FONT_LIST)
+        seed = self._seed
+        for i in range(len(fonts) - 1, 0, -1):
+            j = (seed + i * 31) % (i + 1)
+            fonts[i], fonts[j] = fonts[j], fonts[i]
+            seed = (seed * 1103515245 + 12345) & 0x7fffffff
+        subset = max(8, len(fonts) - (self._seed % 8))
+        self._seed = (self._seed * 1103515245 + 12345) & 0x7fffffff
         return {
             "screenWidth": screen[0],
             "screenHeight": screen[1],
@@ -360,6 +398,7 @@ class FingerprintProfile:
             "gpuRenderer": gpu[1],
             "canvasNoise": self._noise(),
             "audioNoise": self._noise(),
+            "fonts": fonts[:subset],
         }
 
 
@@ -522,6 +561,16 @@ class AccountWorker(threading.Thread):
         fp = FingerprintProfile(self.email).generate()
         options.add_argument(f"user-agent={DESKTOP_UA}")
         options.add_argument("--window-size=1280,900")
+        # Off-screen: Chrome chạy ngoài màn hình
+        options.add_argument("--window-position=10000,0")
+        # Isolated profile per nick — mỗi email có profile riêng, không cross-contaminate
+        import hashlib as _h
+        _profile_dir = os.path.join(
+            os.path.expanduser("~"), ".fb_recovery_profiles",
+            _h.md5(self.email.encode()).hexdigest()[:12]
+        )
+        os.makedirs(_profile_dir, exist_ok=True)
+        options.add_argument(f"--user-data-dir={_profile_dir}")
         # headless=new — ẩn hoàn toàn, thumbnail vẫn hoạt động qua CDP screenshot
         options.add_argument("--headless=new")
         options.add_argument("--disable-blink-features=AutomationControlled")
@@ -666,6 +715,22 @@ class AccountWorker(threading.Thread):
             {{name:'Native Client',filename:'internal-nacl-plugin',description:''}}
         ];
     }}}});
+
+    // === FONT SPOOFING ===
+    try {{
+        const _fonts = {fp['fonts']};
+        const _origCheck = document.fonts.check.bind(document.fonts);
+        document.fonts.check = function(font) {{
+            for (const f of _fonts) {{
+                if (font.toLowerCase().includes(f.toLowerCase())) return true;
+            }}
+            return _origCheck(font);
+        }};
+        Object.defineProperty(navigator, 'fonts', {{
+            get: () => _fonts,
+            configurable: true,
+        }});
+    }} catch(e) {{}}
 }})();
 """
             },
@@ -754,8 +819,23 @@ chrome.webRequest.onAuthRequired.addListener(
         self._refresh_thread.start()
 
     # ------------------------------------------------------------------
+    def _clean_browser_state(self):
+        """Clear cookies + storage trước mỗi attempt — clean slate."""
+        driver = self.driver
+        if not driver:
+            return
+        try:
+            driver.delete_all_cookies()
+        except Exception:
+            pass
+        try:
+            driver.execute_script("window.localStorage.clear(); window.sessionStorage.clear();")
+        except Exception:
+            pass
+
     def _do_attempt(self) -> bool:
         driver = self.driver
+        self._clean_browser_state()
 
         # 1. Navigate
         self.callbacks["log"](self.email, f"[1] Navigate → {RECOVERY_URL}")
@@ -1261,6 +1341,22 @@ class FBHackedRecoveryTool(tk.Tk):
             buttonbackground="#45475a",
             font=("Helvetica", 11),
         ).pack(side="left", padx=(8, 0))
+
+        # Telegram row
+        tg_row = tk.Frame(self, bg="#1e1e2e")
+        tg_row.pack(fill="x", padx=16, pady=(2, 2))
+        tk.Label(tg_row, text="Telegram Token:", bg="#1e1e2e", fg="#cdd6f4",
+                 font=("Helvetica", 11)).pack(side="left")
+        self._tg_token_var = tk.StringVar(value="8736541840:AAGgCYmRPm8UWSbLi2eKAxFXKexRxnxX59Q")
+        tk.Entry(tg_row, textvariable=self._tg_token_var, width=32,
+                 bg="#313244", fg="#cdd6f4", insertbackground="#cdd6f4",
+                 font=("Courier", 9)).pack(side="left", padx=(4, 0))
+        tk.Label(tg_row, text="Chat ID:", bg="#1e1e2e", fg="#cdd6f4",
+                 font=("Helvetica", 11)).pack(side="left", padx=(10, 0))
+        self._tg_chat_var = tk.StringVar()
+        tk.Entry(tg_row, textvariable=self._tg_chat_var, width=14,
+                 bg="#313244", fg="#cdd6f4", insertbackground="#cdd6f4",
+                 font=("Courier", 9)).pack(side="left", padx=(4, 0))
 
         # ----------------------------------------------------------------
         # THREE-PANEL INPUT ROW: Accounts | VPS Pool | Proxy Pool
@@ -2120,6 +2216,26 @@ class FBHackedRecoveryTool(tk.Tk):
         self.after(0, lambda e=email, s=status: self._update_result_row(e, s))
         self.after(100, self._update_stats)
 
+    def _telegram_notify(self, email: str, status: str = "SUCCESS"):
+        token = self._tg_token_var.get().strip() if hasattr(self, '_tg_token_var') else ""
+        chat = self._tg_chat_var.get().strip() if hasattr(self, '_tg_chat_var') else ""
+        if not token or not chat:
+            return
+        def _send():
+            try:
+                import urllib.request as _req, json as _json
+                msg = f"✅ FB Recovery SUCCESS\nEmail: {email}\nStatus: {status}"
+                payload = _json.dumps({"chat_id": chat, "text": msg}).encode()
+                req = _req.Request(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    data=payload, headers={"Content-Type": "application/json"}
+                )
+                _req.urlopen(req, timeout=10)
+                self.after(0, lambda: self._log_append(f"[TG] Notified: {email[:25]}"))
+            except Exception as ex:
+                self.after(0, lambda e=ex: self._log_append(f"[TG] Failed: {e}"))
+        threading.Thread(target=_send, daemon=True).start()
+
     def _cb_success_keep(self, email: str):
         self._success_emails.add(email)  # track để stop_all không đóng Chrome này
         # Lưu worker info để dùng khi click thumbnail sau STOP
@@ -2135,6 +2251,8 @@ class FBHackedRecoveryTool(tk.Tk):
         self.after(0, lambda l=line: self._log_append(l))
         self.after(0, lambda e=email: self._update_result_row(e, "SUCCESS"))
         self.after(100, self._update_stats)
+        # Telegram notification
+        threading.Thread(target=lambda: self._telegram_notify(email), daemon=True).start()
 
     def _cb_thumbnail(self, email: str, b64_data: str):
         if not HAS_PIL:
@@ -2216,6 +2334,22 @@ class FBHackedRecoveryTool(tk.Tk):
         popup.resizable(True, True)
         self._success_popups[email] = popup
 
+        # Session info bar — proxy + cookie status
+        info = tk.Frame(popup, bg="#181825", pady=2)
+        info.pack(fill="x", padx=6, pady=(0, 2))
+        _px = worker.proxy or "No proxy"
+        try:
+            if worker._tunnel and worker._tunnel._proc and worker._tunnel._proc.poll() is None:
+                _px = worker._tunnel.proxy_url() or _px
+        except Exception:
+            pass
+        tk.Label(info, text=f"Proxy: {_px[:50]}", bg="#181825", fg="#89b4fa",
+                 font=("Courier", 8)).pack(side="left")
+        _sess_ok = bool(worker.driver)
+        tk.Label(info, text="● Session live" if _sess_ok else "○ Session dead",
+                 bg="#181825", fg="#a6e3a1" if _sess_ok else "#f38ba8",
+                 font=("Courier", 8)).pack(side="right")
+
         # Screenshot display — cursor crosshair = clickable
         img_frame = tk.Frame(popup, bg="#000")
         img_frame.pack(fill="both", expand=True, padx=6, pady=3)
@@ -2234,6 +2368,18 @@ class FBHackedRecoveryTool(tk.Tk):
             try: popup.destroy()
             except Exception: pass
 
+        def _copy_url():
+            try:
+                url = worker.driver.current_url if worker.driver else ""
+                popup.clipboard_clear()
+                popup.clipboard_append(url)
+                status_var.set(f"Copied: {url[:60]}")
+            except Exception as ex:
+                status_var.set(f"Copy failed: {ex}")
+
+        tk.Button(ctrl, text="⎘ Copy URL", command=_copy_url,
+                  bg="#89dceb", fg="#1e1e2e", relief="flat",
+                  font=("Helvetica", 9), padx=6).pack(side="right", padx=2)
         tk.Button(ctrl, text="✕ Close", command=_close,
                   bg="#f38ba8", fg="#1e1e2e", relief="flat",
                   font=("Helvetica", 9, "bold"), padx=8).pack(side="right")
@@ -2464,6 +2610,8 @@ class FBHackedRecoveryTool(tk.Tk):
                 "vps_list": getattr(self, '_vps_list', []),
                 "max_concurrent": self._max_concurrent_var.get() if hasattr(self, '_max_concurrent_var') else 5,
                 "auto_refresh": self._auto_refresh_var.get() if hasattr(self, '_auto_refresh_var') else 30,
+                "tg_token": self._tg_token_var.get() if hasattr(self, '_tg_token_var') else "",
+                "tg_chat": self._tg_chat_var.get() if hasattr(self, '_tg_chat_var') else "",
             }
             with open(self._STATE_FILE, "w", encoding="utf-8") as f:
                 json.dump(state, f, ensure_ascii=False, indent=2)
@@ -2489,6 +2637,10 @@ class FBHackedRecoveryTool(tk.Tk):
                 self._max_concurrent_var.set(state["max_concurrent"])
             if state.get("auto_refresh") is not None and hasattr(self, '_auto_refresh_var'):
                 self._auto_refresh_var.set(state["auto_refresh"])
+            if state.get("tg_token") and hasattr(self, '_tg_token_var'):
+                self._tg_token_var.set(state["tg_token"])
+            if state.get("tg_chat") and hasattr(self, '_tg_chat_var'):
+                self._tg_chat_var.set(state["tg_chat"])
         except Exception:
             pass
 
