@@ -1475,33 +1475,34 @@ class FBHackedRecoveryTool(tk.Tk):
                 self._results_window, width=e.width
             )
         )
-        # Mouse wheel scroll — bind_all toàn app, chỉ scroll results khi chuột trong vùng
+        # Mouse wheel scroll — bind trực tiếp lên canvas + frame + propagate từ children
         def _scroll_results(e):
-            # Kiểm tra chuột có trong vùng results không
+            delta = e.delta
+            # macOS trackpad: delta nhỏ (~3-10), chuột: delta = 120
+            if delta == 0:
+                return
+            units = int(-1 * delta / 120) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
+            self.results_canvas.yview_scroll(units, "units")
+
+        # Bind trực tiếp — không dùng bind_all để tránh conflict với log box
+        self.results_canvas.bind("<MouseWheel>", _scroll_results)
+        self.results_frame.bind("<MouseWheel>", _scroll_results)
+
+        def _rebind_children(widget):
+            """Bind scroll cho tất cả child widgets trong results."""
             try:
-                cx = self.results_canvas.winfo_rootx()
-                cy = self.results_canvas.winfo_rooty()
-                cw = self.results_canvas.winfo_width()
-                ch = self.results_canvas.winfo_height()
-                mx = self.winfo_pointerx()
-                my = self.winfo_pointery()
-                if not (cx <= mx <= cx + cw and cy <= my <= cy + ch):
-                    return
+                widget.bind("<MouseWheel>", _scroll_results)
+                for child in widget.winfo_children():
+                    _rebind_children(child)
             except Exception:
                 pass
-            delta = e.delta
-            units = int(-1 * delta / 60) if abs(delta) >= 60 else int(-1 * delta) if delta else 0
-            if units != 0:
-                self.results_canvas.yview_scroll(units, "units")
 
-        # bind_all để bắt mọi scroll kể cả khi hover vào child widgets
-        self.bind_all("<MouseWheel>", _scroll_results)
+        # Rebind khi có row mới thêm vào
+        def _on_results_configure(e):
+            self.results_canvas.configure(scrollregion=self.results_canvas.bbox("all"))
+            _rebind_children(self.results_frame)
 
-        # scrollregion update khi content thay đổi
-        self.results_frame.bind(
-            "<Configure>",
-            lambda e: self.results_canvas.configure(scrollregion=self.results_canvas.bbox("all"))
-        )
+        self.results_frame.bind("<Configure>", _on_results_configure)
 
         # Header row in results
         hdr = tk.Frame(self.results_frame, bg="#181825")
