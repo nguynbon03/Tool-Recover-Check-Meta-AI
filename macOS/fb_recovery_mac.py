@@ -563,14 +563,6 @@ class AccountWorker(threading.Thread):
         options.add_argument("--window-size=1280,900")
         # Off-screen: Chrome chạy ngoài màn hình
         options.add_argument("--window-position=10000,0")
-        # Isolated profile per nick — mỗi email có profile riêng, không cross-contaminate
-        import hashlib as _h
-        _profile_dir = os.path.join(
-            os.path.expanduser("~"), ".fb_recovery_profiles",
-            _h.md5(self.email.encode()).hexdigest()[:12]
-        )
-        os.makedirs(_profile_dir, exist_ok=True)
-        options.add_argument(f"--user-data-dir={_profile_dir}")
         # headless=new — ẩn hoàn toàn, thumbnail vẫn hoạt động qua CDP screenshot
         options.add_argument("--headless=new")
         options.add_argument("--disable-blink-features=AutomationControlled")
