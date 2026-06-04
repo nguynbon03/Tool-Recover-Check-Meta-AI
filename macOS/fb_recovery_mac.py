@@ -1447,51 +1447,24 @@ class FBHackedRecoveryTool(tk.Tk):
                 self._results_window, width=e.width
             )
         )
-        # Mouse wheel scroll cho results panel
+        # Mouse wheel scroll — đơn giản, bind_all toàn app, ưu tiên results khi hover
         def _scroll_results(e):
-            # macOS: delta là pixels trực tiếp (trackpad), Windows: bội của 120
             delta = e.delta
-            if abs(delta) >= 100:
-                # Windows / macOS đơn vị lớn
-                units = int(-1 * delta / 120)
-            else:
-                # macOS trackpad — delta nhỏ, dùng trực tiếp
-                units = int(-1 * delta) if delta != 0 else 0
+            units = int(-1 * delta / 60) if abs(delta) >= 60 else int(-1 * delta) if delta else 0
             if units != 0:
                 self.results_canvas.yview_scroll(units, "units")
 
-        def _results_enter(e):
-            self.bind_all("<MouseWheel>", _scroll_results)
+        # Bind vào canvas và frame — khi hover vào bất kỳ đâu trong results thì scroll
+        self.results_canvas.bind("<MouseWheel>", _scroll_results)
+        self.results_frame.bind("<MouseWheel>", _scroll_results)
+        # bind_all khi Enter results panel
+        self.results_canvas.bind("<Enter>", lambda e: self.bind_all("<MouseWheel>", _scroll_results))
+        self.results_canvas.bind("<Leave>", lambda e: self.unbind_all("<MouseWheel>"))
 
-        def _results_leave(e):
-            # Chỉ unbind nếu chuột thực sự ra ngoài vùng canvas
-            rx = self.results_canvas.winfo_rootx()
-            ry = self.results_canvas.winfo_rooty()
-            rw = self.results_canvas.winfo_width()
-            rh = self.results_canvas.winfo_height()
-            mx, my = self.winfo_pointerx(), self.winfo_pointery()
-            if not (rx <= mx <= rx + rw and ry <= my <= ry + rh):
-                self.unbind_all("<MouseWheel>")
-
-        self.results_canvas.bind("<Enter>", _results_enter)
-        self.results_canvas.bind("<Leave>", _results_leave)
-        self.results_frame.bind("<Enter>", _results_enter)
-
-        # Bind scroll vào child widgets mới được thêm vào sau
-        def _bind_children_scroll(widget):
-            try:
-                widget.bind("<Enter>", _results_enter)
-                for c in widget.winfo_children():
-                    _bind_children_scroll(c)
-            except Exception:
-                pass
-        # Hook vào results_frame Configure để bind children khi row mới thêm vào
+        # scrollregion update khi content thay đổi
         self.results_frame.bind(
             "<Configure>",
-            lambda e: (
-                self.results_canvas.configure(scrollregion=self.results_canvas.bbox("all")),
-                _bind_children_scroll(self.results_frame)
-            )
+            lambda e: self.results_canvas.configure(scrollregion=self.results_canvas.bbox("all"))
         )
 
         # Header row in results
