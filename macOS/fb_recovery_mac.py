@@ -1656,11 +1656,19 @@ class FBHackedRecoveryTool(tk.Tk):
                 self._results_window, width=e.width
             )
         )
-        # Mouse wheel scroll — dùng bind_all chỉ khi hover vào results area
-        _results_hover = [False]
-
+        # Mouse wheel scroll — check vị trí chuột thực tế, không dùng Enter/Leave (không reliable)
         def _scroll_results(e):
-            if not _results_hover[0]:
+            # Kiểm tra chuột có đang nằm trong vùng results_container không
+            try:
+                cx = results_container.winfo_rootx()
+                cy = results_container.winfo_rooty()
+                cw = results_container.winfo_width()
+                ch = results_container.winfo_height()
+                mx = e.x_root
+                my = e.y_root
+                if not (cx <= mx <= cx + cw and cy <= my <= cy + ch):
+                    return
+            except Exception:
                 return
             delta = e.delta
             if delta == 0:
@@ -1668,19 +1676,8 @@ class FBHackedRecoveryTool(tk.Tk):
             units = int(-1 * delta / 120) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
             self.results_canvas.yview_scroll(units, "units")
 
-        def _on_results_enter(e):
-            _results_hover[0] = True
-
-        def _on_results_leave(e):
-            _results_hover[0] = False
-
-        # bind_all cho MouseWheel — hoạt động dù focus ở đâu trong results
+        # bind_all — luôn active, dùng tọa độ tuyệt đối để check vùng
         self.bind_all("<MouseWheel>", _scroll_results)
-
-        # Track hover để không steal scroll từ log box
-        for _w in (self.results_canvas, self.results_frame, results_container):
-            _w.bind("<Enter>", _on_results_enter)
-            _w.bind("<Leave>", _on_results_leave)
 
         def _on_results_configure(e):
             self.results_canvas.configure(scrollregion=self.results_canvas.bbox("all"))
