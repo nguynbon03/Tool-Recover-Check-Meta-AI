@@ -2223,18 +2223,27 @@ class FBHackedRecoveryTool(tk.Tk):
             by = int(rel_y * bh / dh)
             return max(0, min(bx, bw - 1)), max(0, min(by, bh - 1))
 
-        # --- Click forwarding ---
-        _CLICK_JS = """
-            var x=arguments[0], y=arguments[1];
-            var el=document.elementFromPoint(x,y);
-            if(el){
-                el.dispatchEvent(new MouseEvent('mouseover',{bubbles:true,clientX:x,clientY:y}));
-                el.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}));
-                el.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}));
-                el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}));
-                if(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT') el.focus();
-            }
-        """
+        # --- CDP click forwarding (works with React synthetic events) ---
+        def _cdp_click(bx, by):
+            drv = worker.driver
+            for ev_type in ("mousePressed", "mouseReleased"):
+                drv.execute_cdp_cmd("Input.dispatchMouseEvent", {
+                    "type": ev_type,
+                    "x": bx, "y": by,
+                    "button": "left",
+                    "clickCount": 1,
+                    "modifiers": 0,
+                })
+
+        def _cdp_focus_at(bx, by):
+            """Click ở tọa độ để focus element, rồi scroll nếu cần."""
+            try:
+                worker.driver.execute_script(
+                    "var el=document.elementFromPoint(arguments[0],arguments[1]);"
+                    "if(el) el.focus();", bx, by
+                )
+            except Exception:
+                pass
 
         def _on_click(event):
             bx, by = _to_browser_coords(event)
@@ -2243,7 +2252,8 @@ class FBHackedRecoveryTool(tk.Tk):
             status_var.set(f"⟳  Click ({bx},{by})...")
             def _do():
                 try:
-                    worker.driver.execute_script(_CLICK_JS, bx, by)
+                    _cdp_focus_at(bx, by)
+                    _cdp_click(bx, by)
                 except Exception:
                     pass
                 popup.after(0, _quick_refresh)
@@ -2255,41 +2265,44 @@ class FBHackedRecoveryTool(tk.Tk):
                 return
             def _do():
                 try:
-                    worker.driver.execute_script("""
-                        var x=arguments[0],y=arguments[1];
-                        var el=document.elementFromPoint(x,y);
-                        if(el) el.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:x,clientY:y}));
-                    """, bx, by)
+                    worker.driver.execute_cdp_cmd("Input.dispatchMouseEvent", {
+                        "type": "mousePressed",
+                        "x": bx, "y": by,
+                        "button": "right",
+                        "clickCount": 1,
+                    })
                 except Exception:
                     pass
                 popup.after(0, _quick_refresh)
             threading.Thread(target=_do, daemon=True).start()
 
-        # --- Keyboard forwarding ---
-        _INPUT_JS = """
-            var el=document.activeElement;
-            if(el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA')){
-                var v=el.value; el.value=v+arguments[0];
-                el.dispatchEvent(new Event('input',{bubbles:true}));
-                el.dispatchEvent(new Event('change',{bubbles:true}));
-            }
-        """
-        _BACKSPACE_JS = """
-            var el=document.activeElement;
-            if(el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA')){
-                el.value=el.value.slice(0,-1);
-                el.dispatchEvent(new Event('input',{bubbles:true}));
-            }
-        """
-        _ENTER_JS = """
-            var el=document.activeElement;
-            if(el){
-                el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',keyCode:13,bubbles:true,cancelable:true}));
-                el.dispatchEvent(new KeyboardEvent('keypress',{key:'Enter',keyCode:13,bubbles:true,cancelable:true}));
-                el.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',keyCode:13,bubbles:true}));
-                if(el.form) el.form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
-            }
-        """
+        # --- CDP keyboard forwarding ---
+        _KEY_MAP = {
+            "Return": ("Enter", "\r", 13),
+            "KP_Enter": ("Enter", "\r", 13),
+            "BackSpace": ("Backspace", "\b", 8),
+            "Tab": ("Tab", "\t", 9),
+            "Delete": ("Delete", "", 46),
+            "Escape": ("Escape", "", 27),
+            "Left": ("ArrowLeft", "", 37),
+            "Right": ("ArrowRight", "", 39),
+            "Up": ("ArrowUp", "", 38),
+            "Down": ("ArrowDown", "", 40),
+            "Home": ("Home", "", 36),
+            "End": ("End", "", 35),
+        }
+
+        def _cdp_key(key_name, text, key_code):
+            drv = worker.driver
+            for ev_type in ("keyDown", "keyUp"):
+                drv.execute_cdp_cmd("Input.dispatchKeyEvent", {
+                    "type": ev_type,
+                    "key": key_name,
+                    "text": text if ev_type == "keyDown" else "",
+                    "windowsVirtualKeyCode": key_code,
+                    "nativeVirtualKeyCode": key_code,
+                    "unmodifiedText": text,
+                })
 
         def _on_key(event):
             ks = event.keysym
@@ -2297,16 +2310,12 @@ class FBHackedRecoveryTool(tk.Tk):
             def _do():
                 try:
                     drv = worker.driver
-                    if ks == 'BackSpace':
-                        drv.execute_script(_BACKSPACE_JS)
-                    elif ks in ('Return', 'KP_Enter'):
-                        drv.execute_script(_ENTER_JS)
-                    elif ks == 'Tab':
-                        drv.execute_script(
-                            "var el=document.activeElement; if(el) el.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',keyCode:9,bubbles:true}));"
-                        )
+                    if ks in _KEY_MAP:
+                        key_name, text, key_code = _KEY_MAP[ks]
+                        _cdp_key(key_name, text, key_code)
                     elif ch and ch.isprintable():
-                        drv.execute_script(_INPUT_JS, ch)
+                        # Printable char — use insertText for accurate React input
+                        drv.execute_cdp_cmd("Input.insertText", {"text": ch})
                     else:
                         return
                 except Exception:
@@ -2320,9 +2329,18 @@ class FBHackedRecoveryTool(tk.Tk):
             scroll_px = -int(delta / 5) if abs(delta) >= 60 else (-20 if delta > 0 else 20)
             def _do():
                 try:
-                    worker.driver.execute_script(f"window.scrollBy(0, {scroll_px})")
+                    bx2 = _state["browser_w"] // 2
+                    by2 = _state["browser_h"] // 2
+                    worker.driver.execute_cdp_cmd("Input.dispatchMouseEvent", {
+                        "type": "mouseWheel",
+                        "x": bx2, "y": by2,
+                        "deltaX": 0, "deltaY": scroll_px,
+                    })
                 except Exception:
-                    pass
+                    try:
+                        worker.driver.execute_script(f"window.scrollBy(0,{scroll_px})")
+                    except Exception:
+                        pass
                 popup.after(0, _quick_refresh)
             threading.Thread(target=_do, daemon=True).start()
 
