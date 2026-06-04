@@ -1080,6 +1080,23 @@ class FBHackedRecoveryTool(tk.Tk):
         self._build_ui()
         self._load_state()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        # Kill orphan chromedriver processes (PPID=1) còn sót từ session cũ
+        # Chúng spawn Chrome không headless → hiện Dock icon
+        try:
+            r = subprocess.run(
+                ["pgrep", "-f", "chromedriver.*fb_recovery\|chromedriver.*fb_view"],
+                capture_output=True, text=True
+            )
+            # Kill chromedriver orphan có PPID=1 (không còn parent)
+            r2 = subprocess.run(["pgrep", "chromedriver"], capture_output=True, text=True)
+            for pid in r2.stdout.strip().split():
+                if pid:
+                    ppid_r = subprocess.run(["ps", "-p", pid, "-o", "ppid="], capture_output=True, text=True)
+                    ppid = ppid_r.stdout.strip()
+                    if ppid == "1":  # orphan
+                        subprocess.run(["kill", "-9", pid], capture_output=True)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     def _kill_stale_view_chromes(self):
