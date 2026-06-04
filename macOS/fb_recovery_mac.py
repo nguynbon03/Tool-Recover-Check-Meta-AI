@@ -1080,21 +1080,49 @@ class FBHackedRecoveryTool(tk.Tk):
         self._build_ui()
         self._load_state()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        # Kill orphan chromedriver processes (PPID=1) còn sót từ session cũ
-        # Chúng spawn Chrome không headless → hiện Dock icon
+        # Luật: khi tool khởi động, kill TẤT CẢ Chrome view cũ từ session trước
+        # Không lưu luyến — session cũ đã xong thì bỏ hết
+        self._nuke_old_chrome_views()
+
+    # ------------------------------------------------------------------
+    def _nuke_old_chrome_views(self):
+        """Luật cứng: kill tất cả Chrome từ session cũ khi tool start.
+        Không cache, không lưu luyến session cũ."""
         try:
+            # 1. Kill Chrome process dùng fb_recovery_views profile
             r = subprocess.run(
-                ["pgrep", "-f", "chromedriver.*fb_recovery\|chromedriver.*fb_view"],
+                ["pgrep", "-f", "fb_recovery_views"],
                 capture_output=True, text=True
             )
-            # Kill chromedriver orphan có PPID=1 (không còn parent)
-            r2 = subprocess.run(["pgrep", "chromedriver"], capture_output=True, text=True)
+            for pid in r.stdout.strip().split():
+                if pid:
+                    subprocess.run(["kill", "-9", pid], capture_output=True)
+
+            # 2. Kill Chrome process dùng fb_view_ temp profile
+            r2 = subprocess.run(
+                ["pgrep", "-f", "fb_view_"],
+                capture_output=True, text=True
+            )
             for pid in r2.stdout.strip().split():
                 if pid:
-                    ppid_r = subprocess.run(["ps", "-p", pid, "-o", "ppid="], capture_output=True, text=True)
-                    ppid = ppid_r.stdout.strip()
-                    if ppid == "1":  # orphan
+                    subprocess.run(["kill", "-9", pid], capture_output=True)
+
+            # 3. Kill chromedriver orphan (PPID=1) — không còn parent tool
+            r3 = subprocess.run(["pgrep", "-f", "chromedriver"], capture_output=True, text=True)
+            for pid in r3.stdout.strip().split():
+                if pid:
+                    ppid_r = subprocess.run(["ps", "-p", pid, "-o", "ppid="],
+                                            capture_output=True, text=True)
+                    if ppid_r.stdout.strip() == "1":
                         subprocess.run(["kill", "-9", pid], capture_output=True)
+
+            # 4. Xóa fb_view_ temp dirs còn sót
+            import glob, shutil
+            for d in glob.glob("/tmp/fb_view_*"):
+                try:
+                    shutil.rmtree(d, ignore_errors=True)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -1447,19 +1475,27 @@ class FBHackedRecoveryTool(tk.Tk):
                 self._results_window, width=e.width
             )
         )
-        # Mouse wheel scroll — đơn giản, bind_all toàn app, ưu tiên results khi hover
+        # Mouse wheel scroll — bind_all toàn app, chỉ scroll results khi chuột trong vùng
         def _scroll_results(e):
+            # Kiểm tra chuột có trong vùng results không
+            try:
+                cx = self.results_canvas.winfo_rootx()
+                cy = self.results_canvas.winfo_rooty()
+                cw = self.results_canvas.winfo_width()
+                ch = self.results_canvas.winfo_height()
+                mx = self.winfo_pointerx()
+                my = self.winfo_pointery()
+                if not (cx <= mx <= cx + cw and cy <= my <= cy + ch):
+                    return
+            except Exception:
+                pass
             delta = e.delta
             units = int(-1 * delta / 60) if abs(delta) >= 60 else int(-1 * delta) if delta else 0
             if units != 0:
                 self.results_canvas.yview_scroll(units, "units")
 
-        # Bind vào canvas và frame — khi hover vào bất kỳ đâu trong results thì scroll
-        self.results_canvas.bind("<MouseWheel>", _scroll_results)
-        self.results_frame.bind("<MouseWheel>", _scroll_results)
-        # bind_all khi Enter results panel
-        self.results_canvas.bind("<Enter>", lambda e: self.bind_all("<MouseWheel>", _scroll_results))
-        self.results_canvas.bind("<Leave>", lambda e: self.unbind_all("<MouseWheel>"))
+        # bind_all để bắt mọi scroll kể cả khi hover vào child widgets
+        self.bind_all("<MouseWheel>", _scroll_results)
 
         # scrollregion update khi content thay đổi
         self.results_frame.bind(
