@@ -2423,41 +2423,55 @@ class FBHackedRecoveryTool(tk.Tk):
                 status_var.set(f"Copy failed: {ex}")
 
         def _open_chrome():
-            """Mở Chrome thật với cùng session (profile + cookies) để user tương tác trực tiếp."""
+            """Mở Chrome visible + inject cookies từ headless session — cùng trang, cùng login."""
             def _do():
                 try:
                     drv = worker.driver
                     if not drv:
                         popup.after(0, lambda: status_var.set("⚠ No active session"))
                         return
-                    # Lấy current URL
+                    popup.after(0, lambda: status_var.set("⏳ Opening Chrome..."))
                     cur_url = drv.current_url
-                    # Lấy profile dir từ Chrome options
-                    caps = drv.capabilities or {}
-                    chrome_args = caps.get("goog:chromeOptions", {}).get("args", [])
-                    profile_dir = ""
-                    for a in chrome_args:
-                        if a.startswith("--user-data-dir="):
-                            profile_dir = a.split("=", 1)[1]
-                            break
-                    # Export cookies sang visible Chrome
                     cookies = drv.get_cookies()
-                    # Mở Chrome hiển thị với cùng profile
-                    import subprocess as _sp
-                    chrome_paths = [
-                        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                        "/Applications/Chromium.app/Contents/MacOS/Chromium",
-                    ]
-                    chrome_bin = next((p for p in chrome_paths if os.path.exists(p)), None)
-                    if not chrome_bin:
-                        popup.after(0, lambda: status_var.set("⚠ Chrome not found"))
-                        return
-                    cmd = [chrome_bin]
-                    if profile_dir:
-                        cmd += [f"--user-data-dir={profile_dir}"]
-                    cmd += ["--new-window", cur_url]
-                    _sp.Popen(cmd)
-                    popup.after(0, lambda: status_var.set(f"Chrome opened: {cur_url[:50]}"))
+
+                    # Tạo Chrome visible (không headless) với proxy giống headless
+                    vis_options = Options()
+                    vis_options.add_argument(f"user-agent={DESKTOP_UA}")
+                    vis_options.add_argument("--disable-blink-features=AutomationControlled")
+                    vis_options.add_argument("--lang=en-US")
+                    vis_options.add_argument("--no-first-run")
+                    vis_options.add_argument("--no-default-browser-check")
+                    vis_options.add_argument("--disable-notifications")
+                    vis_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                    vis_options.add_experimental_option("useAutomationExtension", False)
+                    # Thêm proxy giống worker
+                    try:
+                        if worker._tunnel and worker._tunnel._proc and worker._tunnel._proc.poll() is None:
+                            turl = worker._tunnel.proxy_url()
+                            if turl:
+                                vis_options.add_argument(f"--proxy-server={turl}")
+                        elif worker.proxy:
+                            vis_options.add_argument(f"--proxy-server={worker.proxy}")
+                    except Exception:
+                        pass
+
+                    vis_drv = webdriver.Chrome(service=Service(), options=vis_options)
+                    # Điều hướng về facebook.com để set cookies đúng domain
+                    vis_drv.get("https://www.facebook.com/")
+                    time.sleep(2)
+                    # Inject tất cả cookies từ headless
+                    for c in cookies:
+                        try:
+                            c.pop("sameSite", None)
+                            vis_drv.add_cookie(c)
+                        except Exception:
+                            pass
+                    # Điều hướng đến trang đang mở trong headless
+                    vis_drv.get(cur_url)
+                    popup.after(0, lambda: status_var.set(f"✅ Chrome opened: {cur_url[:50]}"))
+                    # Track visible driver để không bị GC
+                    with self._lock:
+                        self._view_drivers[email] = vis_drv
                 except Exception as ex:
                     popup.after(0, lambda e=ex: status_var.set(f"Open Chrome failed: {e}"))
             threading.Thread(target=_do, daemon=True).start()
