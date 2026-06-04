@@ -1080,6 +1080,29 @@ class FBHackedRecoveryTool(tk.Tk):
         self._build_ui()
         self._load_state()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        # Kill Chrome view cũ còn sót từ session trước (detach=True)
+        self._kill_stale_view_chromes()
+
+    # ------------------------------------------------------------------
+    def _kill_stale_view_chromes(self):
+        """Kill Chrome processes dùng fb_view_ profiles còn sót từ session trước."""
+        try:
+            views_root = os.path.join(os.path.expanduser("~"), ".fb_recovery_views")
+            if not os.path.isdir(views_root):
+                return
+            # Tìm Chrome process nào đang dùng profile trong .fb_recovery_views
+            r = subprocess.run(
+                ["pgrep", "-f", "fb_recovery_views"],
+                capture_output=True, text=True
+            )
+            for pid in r.stdout.strip().split():
+                if pid:
+                    try:
+                        subprocess.run(["kill", "-9", pid], capture_output=True)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     def _build_ui(self):
