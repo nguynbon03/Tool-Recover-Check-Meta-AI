@@ -2060,23 +2060,40 @@ class FBHackedRecoveryTool(tk.Tk):
             except Exception:
                 cookies = []
 
-            import threading, tempfile, json as _json, shutil as _shutil
-            def _open(url=current_url, px=proxy_str, cks=cookies, em=email):
+            import threading, json as _json
+
+            # Profile cố định theo email — tồn tại mãi mãi trên disk
+            safe_name = "".join(c if c.isalnum() else "_" for c in email)
+            view_dir = os.path.join(os.path.expanduser("~"), ".fb_recovery_views", safe_name)
+            os.makedirs(view_dir, exist_ok=True)
+
+            # Lưu toàn bộ cookies + proxy + URL vào profile để restore bất cứ lúc nào
+            session_data = {
+                "email": email,
+                "url": current_url,
+                "proxy": proxy_str,
+                "cookies": cookies,
+            }
+            try:
+                with open(os.path.join(view_dir, "session.json"), "w", encoding="utf-8") as f:
+                    _json.dump(session_data, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
+            def _open(url=current_url, px=proxy_str, cks=cookies, em=email, vdir=view_dir):
                 try:
                     from selenium import webdriver as wd
                     from selenium.webdriver.chrome.options import Options as COptions
                     from selenium.webdriver.chrome.service import Service as CService
 
-                    # Tạo profile cố định theo email — tồn tại vĩnh viễn, không phải tempdir
-                    safe_name = "".join(c if c.isalnum() else "_" for c in em)
-                    view_dir = os.path.join(os.path.expanduser("~"), ".fb_recovery_views", safe_name)
-                    os.makedirs(view_dir, exist_ok=True)
-
                     opts = COptions()
-                    opts.add_argument(f"--user-data-dir={view_dir}")
+                    opts.add_argument(f"--user-data-dir={vdir}")
                     opts.add_argument("--no-first-run")
                     opts.add_argument("--no-default-browser-check")
                     opts.add_argument("--disable-blink-features=AutomationControlled")
+                    # Detach: Chrome hoàn toàn độc lập — không bị kill khi tool đóng
+                    opts.add_experimental_option("detach", True)
+
                     if px:
                         if px.startswith("socks5://"):
                             opts.add_argument(f"--proxy-server={px}")
@@ -2086,37 +2103,31 @@ class FBHackedRecoveryTool(tk.Tk):
                                 opts.add_argument(f"--load-extension={ext_dir}")
                             else:
                                 opts.add_argument(f"--proxy-server={px}")
+
                     drv = wd.Chrome(service=CService(), options=opts)
+
+                    # Inject cookies đúng domain facebook.com
                     drv.get("https://www.facebook.com")
-                    # Inject cookies
                     for ck in cks:
                         try:
-                            ck.pop("sameSite", None)
-                            ck.pop("expiry", None)
-                            drv.add_cookie(ck)
+                            ck2 = {k: v for k, v in ck.items() if k not in ("sameSite", "expiry")}
+                            drv.add_cookie(ck2)
                         except Exception:
                             pass
-                    # Lưu cookies ra file để restore sau nếu cần
-                    try:
-                        with open(os.path.join(view_dir, "fb_cookies.json"), "w") as f:
-                            _json.dump(cks, f)
-                    except Exception:
-                        pass
+
+                    # Navigate đến URL đích — đúng phiên đang chạy trong headless
                     drv.get(url)
-                    # Tách Chrome ra khỏi chromedriver — Chrome sống độc lập
-                    # Detach: Chrome không bị kill khi chromedriver/tool đóng
-                    try:
-                        drv.service.process.kill()  # Kill chromedriver only, Chrome vẫn sống
-                    except Exception:
-                        pass
-                    # Chrome đã detach — tồn tại độc lập, không phụ thuộc tool
+
+                    # Chrome ở lại cho user dùng tự do — tool không can thiệp nữa
+                    # detach=True đảm bảo Chrome tồn tại dù tool/chromedriver đóng
+
                 except Exception as ex:
                     self._log_append(f"[Chrome] Open error: {ex}")
                 finally:
                     self._view_opening.discard(em)
 
-            threading.Thread(target=_open, daemon=False).start()  # non-daemon: thread hoàn thành trước khi tool exit
-            self._log_append(f"[Chrome] Opening: {email[:25]} proxy={proxy_str or 'none'}")
+            threading.Thread(target=_open, daemon=False).start()
+            self._log_append(f"[Chrome] Opening: {email[:25]} proxy={proxy_str or 'none'} | profile saved")
         except Exception as e:
             self._view_opening.discard(email)
             self._log_append(f"[Chrome] Error: {e}")
