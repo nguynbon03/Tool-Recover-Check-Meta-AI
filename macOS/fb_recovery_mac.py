@@ -2100,15 +2100,22 @@ class FBHackedRecoveryTool(tk.Tk):
                     from selenium.webdriver.chrome.service import Service as CService
 
                     # Kill Chrome view cũ của email này nếu còn mở
-                    old_drv = self._view_drivers.pop(em, None)
-                    if old_drv:
+                    old_info = self._view_drivers.pop(em, None)
+                    if old_info:
+                        old_drv, old_dir = old_info if isinstance(old_info, tuple) else (old_info, None)
                         try:
                             old_drv.quit()
                         except Exception:
                             pass
+                        # Xóa tmpdir cũ để không còn Chrome sót trong Dock
+                        if old_dir and os.path.isdir(old_dir):
+                            try:
+                                import shutil as _sh
+                                _sh.rmtree(old_dir, ignore_errors=True)
+                            except Exception:
+                                pass
 
                     # Profile sạch riêng cho Chrome view — KHÔNG dùng profile headless
-                    # (headless đang chạy và lock profile, dùng chung sẽ crash)
                     view_dir = _tmp.mkdtemp(prefix="fb_view_")
 
                     opts = COptions()
@@ -2143,8 +2150,8 @@ class FBHackedRecoveryTool(tk.Tk):
                     # Navigate đến đúng URL — phiên hoàn toàn đồng bộ với headless
                     drv.get(url)
 
-                    # Lưu driver để có thể kill khi click lại
-                    self._view_drivers[em] = drv
+                    # Lưu (driver, view_dir) để kill + cleanup khi click lại
+                    self._view_drivers[em] = (drv, view_dir)
                     # Chrome ở lại cho user — tool không can thiệp gì nữa
 
                 except Exception as ex:
