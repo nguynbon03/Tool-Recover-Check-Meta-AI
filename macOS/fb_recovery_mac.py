@@ -2020,14 +2020,21 @@ class FBHackedRecoveryTool(tk.Tk):
         self.after(0, _update)
 
     def _on_thumbnail_click(self, email: str):
-        # Chống spam — mỗi email chỉ cho phép 1 Chrome view cùng lúc
-        if not hasattr(self, '_view_opening'):
-            self._view_opening: set = set()
-        if email in self._view_opening:
-            return
-        self._view_opening.add(email)
+        """Bấm thumbnail → mở popup in-app với screenshot lớn, không mở Chrome ngoài."""
+        if not hasattr(self, '_success_popups'):
+            self._success_popups: dict = {}
 
-        # Tìm worker — ưu tiên _workers đang chạy, fallback sang _success_worker_info
+        # Nếu popup đang mở, focus lại
+        existing = self._success_popups.get(email)
+        if existing and existing.winfo_exists():
+            try:
+                existing.lift()
+                existing.focus_force()
+            except Exception:
+                pass
+            return
+
+        # Tìm worker có driver
         target_worker = None
         for w in self._workers:
             if w.email == email and w.driver:
@@ -2037,148 +2044,90 @@ class FBHackedRecoveryTool(tk.Tk):
             target_worker = self._success_worker_info[email].get("worker")
 
         if not (target_worker and target_worker.driver):
-            self._view_opening.discard(email)
-            self._log_append(f"[Chrome] No active driver for {email[:25]}")
+            self._log_append(f"[View] No active session for {email[:25]}")
             return
 
         w = target_worker
-        try:
-            current_url = w.driver.current_url
 
-            proxy_str = None
-            if w._tunnel and w._tunnel._proc and w._tunnel._proc.poll() is None:
-                proxy_str = w._tunnel.proxy_url()
-            elif w.proxy:
-                proxy_str = w.proxy
+        # Tạo popup window trong app
+        popup = tk.Toplevel(self)
+        popup.title(f"✅ {email}")
+        popup.configure(bg="#1e1e2e")
+        popup.geometry("900x620")
+        popup.resizable(True, True)
+        self._success_popups[email] = popup
 
-            # Lấy --user-data-dir của Chrome headless đang chạy
-            profile_dir = None
+        # URL bar
+        url_frame = tk.Frame(popup, bg="#181825", pady=4)
+        url_frame.pack(fill="x", padx=8)
+        tk.Label(url_frame, text="URL:", bg="#181825", fg="#6c7086",
+                 font=("Courier", 9)).pack(side="left")
+        url_var = tk.StringVar(value="Loading...")
+        url_lbl = tk.Label(url_frame, textvariable=url_var, bg="#181825", fg="#cdd6f4",
+                           font=("Courier", 9), anchor="w", wraplength=800)
+        url_lbl.pack(side="left", fill="x", expand=True)
+
+        # Screenshot display
+        img_frame = tk.Frame(popup, bg="#000000")
+        img_frame.pack(fill="both", expand=True, padx=8, pady=4)
+        img_lbl = tk.Label(img_frame, bg="#000000", cursor="arrow")
+        img_lbl.pack(fill="both", expand=True)
+        img_lbl.image = None
+
+        # Controls
+        ctrl_frame = tk.Frame(popup, bg="#1e1e2e", pady=4)
+        ctrl_frame.pack(fill="x", padx=8)
+
+        status_var = tk.StringVar(value="Live")
+        tk.Label(ctrl_frame, textvariable=status_var, bg="#1e1e2e", fg="#a6e3a1",
+                 font=("Courier", 9)).pack(side="left")
+
+        def _close():
             try:
-                drv_pid = w.driver.service.process.pid
-                r = subprocess.run(["pgrep", "-P", str(drv_pid)], capture_output=True, text=True)
-                for cpid in r.stdout.strip().split():
-                    pr = subprocess.run(["ps", "-p", cpid, "-o", "command="], capture_output=True, text=True)
-                    for part in pr.stdout.split():
-                        if part.startswith("--user-data-dir="):
-                            profile_dir = part.split("=", 1)[1]
-                            break
-                    if profile_dir:
-                        break
+                self._success_popups.pop(email, None)
+                popup.destroy()
             except Exception:
                 pass
 
-            import threading, json as _json
+        tk.Button(ctrl_frame, text="✕ Close", command=_close,
+                  bg="#f38ba8", fg="#1e1e2e", relief="flat",
+                  font=("Helvetica", 9, "bold"), padx=8).pack(side="right")
 
-            # Lưu session ra disk (email cố định) để restore sau nếu cần
-            safe_name = "".join(c if c.isalnum() else "_" for c in email)
-            save_dir = os.path.join(os.path.expanduser("~"), ".fb_recovery_views", safe_name)
-            os.makedirs(save_dir, exist_ok=True)
+        # Live screenshot refresh loop
+        _refresh_running = [True]
+
+        def _refresh():
+            if not _refresh_running[0] or not popup.winfo_exists():
+                return
             try:
-                cookies = list(w.driver.get_cookies())
-                with open(os.path.join(save_dir, "session.json"), "w", encoding="utf-8") as f:
-                    _json.dump({"email": email, "url": current_url, "proxy": proxy_str, "cookies": cookies}, f, ensure_ascii=False, indent=2)
-            except Exception:
-                cookies = []
-
-            def _show(url=current_url, px=proxy_str, cks=cookies, em=email, sdir=save_dir):
-                try:
-                    import tempfile as _tmp
-                    from selenium import webdriver as wd
-                    from selenium.webdriver.chrome.options import Options as COptions
-                    from selenium.webdriver.chrome.service import Service as CService
-
-                    # Kill Chrome view cũ của email này nếu còn mở
-                    old_info = self._view_drivers.pop(em, None)
-                    if old_info:
-                        old_drv, old_dir = old_info if isinstance(old_info, tuple) else (old_info, None)
-                        try:
-                            old_drv.quit()
-                        except Exception:
-                            pass
-                        # Xóa tmpdir cũ để không còn Chrome sót trong Dock
-                        if old_dir and os.path.isdir(old_dir):
-                            try:
-                                import shutil as _sh
-                                _sh.rmtree(old_dir, ignore_errors=True)
-                            except Exception:
-                                pass
-
-                    # Profile sạch riêng cho Chrome view — KHÔNG dùng profile headless
-                    view_dir = _tmp.mkdtemp(prefix="fb_view_")
-
-                    opts = COptions()
-                    opts.add_argument(f"--user-data-dir={view_dir}")
-                    opts.add_argument("--no-first-run")
-                    opts.add_argument("--no-default-browser-check")
-                    opts.add_argument("--disable-blink-features=AutomationControlled")
-
-                    if px:
-                        if px.startswith("socks5://"):
-                            opts.add_argument(f"--proxy-server={px}")
-                        else:
-                            ext_dir2 = w._make_proxy_extension(px) if hasattr(w, '_make_proxy_extension') else None
-                            if ext_dir2:
-                                opts.add_argument(f"--load-extension={ext_dir2}")
-                            else:
-                                opts.add_argument(f"--proxy-server={px}")
-
-                    # Mở Chrome thường với profile sạch + proxy đúng
-                    drv = wd.Chrome(service=CService(), options=opts)
-
-                    # Inject cookies từ headless → Chrome view có cùng session
-                    drv.get("https://www.facebook.com")
-                    for ck in cks:
-                        try:
-                            ck2 = {k: v for k, v in ck.items()
-                                   if k not in ("sameSite", "expiry")}
-                            drv.add_cookie(ck2)
-                        except Exception:
-                            pass
-
-                    # Navigate đến đúng URL — phiên hoàn toàn đồng bộ với headless
-                    drv.get(url)
-
-                    # Lưu (driver, view_dir) để kill + cleanup khi click lại
-                    self._view_drivers[em] = (drv, view_dir)
-                    # Chrome ở lại cho user — tool không can thiệp gì nữa
-
-                except Exception as ex:
-                    # Fallback: inject cookies vào profile cố định
+                if w.driver:
                     try:
-                        from selenium import webdriver as wd2
-                        from selenium.webdriver.chrome.options import Options as COptions2
-                        from selenium.webdriver.chrome.service import Service as CService2
-                        opts2 = COptions2()
-                        opts2.add_argument(f"--user-data-dir={sdir}")
-                        opts2.add_argument("--no-first-run")
-                        # detach removed
-                        if px:
-                            if px.startswith("socks5://"):
-                                opts2.add_argument(f"--proxy-server={px}")
-                            else:
-                                e2 = w._make_proxy_extension(px) if hasattr(w, '_make_proxy_extension') else None
-                                if e2:
-                                    opts2.add_argument(f"--load-extension={e2}")
-                        drv2 = wd2.Chrome(service=CService2(), options=opts2)
-                        drv2.get("https://www.facebook.com")
-                        for ck in cks:
-                            try:
-                                ck2 = {k: v for k, v in ck.items() if k not in ("sameSite", "expiry")}
-                                drv2.add_cookie(ck2)
-                            except Exception:
-                                pass
-                        drv2.get(url)
-                    except Exception as ex2:
-                        self._log_append(f"[Chrome] Fallback error: {ex2}")
-                    self._log_append(f"[Chrome] Primary error: {ex}")
-                finally:
-                    self._view_opening.discard(em)
+                        url_var.set(w.driver.current_url)
+                    except Exception:
+                        pass
+                    png = w.driver.get_screenshot_as_png()
+                    import io
+                    img = Image.open(io.BytesIO(png))
+                    # Fit to popup size
+                    pw = max(img_frame.winfo_width(), 860)
+                    ph = max(img_frame.winfo_height(), 480)
+                    img.thumbnail((pw, ph), Image.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    img_lbl.configure(image=photo)
+                    img_lbl.image = photo
+                    status_var.set(f"Live  {img.width}×{img.height}")
+            except Exception as ex:
+                status_var.set(f"Err: {str(ex)[:40]}")
+            if _refresh_running[0] and popup.winfo_exists():
+                popup.after(1500, _refresh)
 
-            threading.Thread(target=_show, daemon=True).start()
-            self._log_append(f"[Chrome] Showing session: {email[:25]}")
-        except Exception as e:
-            self._view_opening.discard(email)
-            self._log_append(f"[Chrome] Error: {e}")
+        def _on_close_popup():
+            _refresh_running[0] = False
+            _close()
+
+        popup.protocol("WM_DELETE_WINDOW", _on_close_popup)
+        popup.after(100, _refresh)
+        self._log_append(f"[View] Opened popup for {email[:25]}")
 
     # ------------------------------------------------------------------
     _STATE_FILE = os.path.expanduser("~/.fb_recovery_state.json")
