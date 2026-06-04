@@ -42,27 +42,10 @@ RECOVERY_URL = (
 )
 
 SUPPORT_JS = """
-const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
-const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
-const els = document.querySelectorAll("button,a,div[role='button'],span");
-for (const el of els) {
-    const rect = el.getBoundingClientRect();
-    if (rect.width===0||rect.height===0) continue;
-    if (rect.left < vw*0.7 || rect.top < vh*0.8) continue;
-    const style = getComputedStyle(el);
-    if (style.display==='none'||style.visibility==='hidden'||style.opacity==='0') continue;
-    const tag = el.tagName;
-    const role = el.getAttribute('role');
-    const isClickable = tag==='BUTTON' || tag==='A' || role==='button' || style.cursor==='pointer';
-    if (!isClickable) continue;
-    const txt = (el.innerText||'').trim();
-    if (txt) return txt;
-    return "bottom-right-interactive";
-}
 const targets = ["Nhận hỗ trợ","Get support","Get Support","Contact support",
                  "Liên hệ hỗ trợ","Chat với AI","Chat with AI"];
-const els2 = document.querySelectorAll("button,a,div[role='button'],span,div");
-for (const el of els2) {
+const els = document.querySelectorAll("button,a,div[role='button'],span,div");
+for (const el of els) {
     const txt = (el.innerText||'').trim();
     if (txt.length > 90) continue;
     const rect = el.getBoundingClientRect();
@@ -393,8 +376,7 @@ class AccountWorker(threading.Thread):
         semaphore: Optional[threading.Semaphore] = None,
         vps_list: Optional[list] = None,
         proxy_list: Optional[list] = None,
-        window_w: int = 700,
-        window_h: int = 700,
+        auto_refresh_minutes: int = 0,
     ):
         super().__init__(daemon=True)
         self.email = email
@@ -411,8 +393,8 @@ class AccountWorker(threading.Thread):
         self._proxy_list = proxy_list or ([proxy] if proxy else [])
         self._screenshot_active = False
         self._proxy_bridge = None
-        self.window_w = window_w
-        self.window_h = window_h
+        self._auto_refresh_minutes = auto_refresh_minutes
+        self._refresh_thread: Optional[threading.Thread] = None
 
     def _start_tunnel(self) -> Optional[str]:
         """Start SSH tunnel nếu có VPS. Return proxy_url hoặc None."""
@@ -487,8 +469,12 @@ class AccountWorker(threading.Thread):
 
             if success:
                 # SUCCESS — không bao giờ tắt bất cứ thứ gì
+                self._show_window()
                 self.callbacks["result"](self.email, "SUCCESS")
                 self.callbacks["success_keep"](self.email)
+                # Start auto refresh daemon if configured (>0 minutes)
+                if self._auto_refresh_minutes > 0:
+                    self._start_refresh_thread()
                 # Giữ driver + tunnel + screenshot mãi mãi — không tắt dù STOP ALL
                 # Chrome view của user hoàn toàn độc lập, không bị đụng
                 while True:
@@ -535,7 +521,7 @@ class AccountWorker(threading.Thread):
         options = Options()
         fp = FingerprintProfile(self.email).generate()
         options.add_argument(f"user-agent={DESKTOP_UA}")
-        options.add_argument(f"--window-size={self.window_w},{self.window_h}")
+        options.add_argument("--window-size=1280,900")
         # headless=new — ẩn hoàn toàn, thumbnail vẫn hoạt động qua CDP screenshot
         options.add_argument("--headless=new")
         options.add_argument("--disable-blink-features=AutomationControlled")
@@ -749,6 +735,23 @@ chrome.webRequest.onAuthRequired.addListener(
 
     def _stop_screenshot_thread(self):
         self._screenshot_active = False
+
+    def _start_refresh_thread(self):
+        """Start a daemon thread that refreshes the page every N minutes."""
+        interval = self._auto_refresh_minutes * 60
+        self.callbacks["log"](self.email, f"[AutoRefresh] Starting every {self._auto_refresh_minutes} min ({interval}s)")
+
+        def _loop():
+            while True:
+                time.sleep(interval)
+                try:
+                    if self.driver and self._stop and not self._stop.is_set():
+                        self.driver.refresh()
+                        self.callbacks["log"](self.email, "[AutoRefresh] Page refreshed")
+                except Exception as exc:
+                    self.callbacks["log"](self.email, f"[AutoRefresh] Refresh error: {exc}")
+        self._refresh_thread = threading.Thread(target=_loop, daemon=True)
+        self._refresh_thread.start()
 
     # ------------------------------------------------------------------
     def _do_attempt(self) -> bool:
@@ -1060,40 +1063,6 @@ chrome.webRequest.onAuthRequired.addListener(
                 return True
         except Exception as exc:
             self.callbacks["log"](self.email, f"[Support check] {exc}")
-        # Selenium CSS-selector fallback for bottom-right interactive elements
-        try:
-            vw_vh = driver.execute_script("return [window.innerWidth, window.innerHeight];")
-            vw, vh = vw_vh[0], vw_vh[1]
-            if vw and vh:
-                cutoff_x = vw * 0.7
-                cutoff_y = vh * 0.8
-                candidates = driver.find_elements(
-                    By.CSS_SELECTOR,
-                    "button, a, div[role='button'], span"
-                )
-                for el in candidates:
-                    try:
-                        if not el.is_displayed():
-                            continue
-                        loc = el.location
-                        size = el.size
-                        if loc['x'] + size['width'] < cutoff_x or loc['y'] + size['height'] < cutoff_y:
-                            continue
-                        tag = el.tag_name
-                        role = el.get_attribute("role")
-                        cursor = driver.execute_script(
-                            "return getComputedStyle(arguments[0]).cursor;", el
-                        )
-                        is_clickable = tag in ("button", "a") or role == "button" or cursor == "pointer"
-                        if is_clickable:
-                            txt = (el.text or "").strip()
-                            label = txt if txt else "bottom-right-interactive"
-                            self.callbacks["log"](self.email, f"[Support] Found element (selenium): '{label}'")
-                            return True
-                    except Exception:
-                        continue
-        except Exception as exc2:
-            self.callbacks["log"](self.email, f"[Support selenium fallback] {exc2}")
         return False
 
 
@@ -1279,34 +1248,19 @@ class FBHackedRecoveryTool(tk.Tk):
         ).pack(side="left", padx=(8, 0))
 
         tk.Label(
-            concurrent_row, text="Window W:",
+            concurrent_row, text="Auto refresh (min):",
             bg="#1e1e2e", fg="#cdd6f4", font=("Helvetica", 11)
-        ).pack(side="left", padx=(16, 0))
-        self._window_w_var = tk.IntVar(value=700)
+        ).pack(side="left", padx=(20, 0))
+        self._auto_refresh_var = tk.IntVar(value=30)
         tk.Spinbox(
             concurrent_row,
-            from_=400, to=1920,
-            textvariable=self._window_w_var,
-            width=5,
+            from_=0, to=1440,
+            textvariable=self._auto_refresh_var,
+            width=4,
             bg="#313244", fg="#cdd6f4",
             buttonbackground="#45475a",
             font=("Helvetica", 11),
-        ).pack(side="left", padx=(4, 0))
-
-        tk.Label(
-            concurrent_row, text="H:",
-            bg="#1e1e2e", fg="#cdd6f4", font=("Helvetica", 11)
         ).pack(side="left", padx=(8, 0))
-        self._window_h_var = tk.IntVar(value=700)
-        tk.Spinbox(
-            concurrent_row,
-            from_=400, to=1080,
-            textvariable=self._window_h_var,
-            width=5,
-            bg="#313244", fg="#cdd6f4",
-            buttonbackground="#45475a",
-            font=("Helvetica", 11),
-        ).pack(side="left", padx=(4, 0))
 
         # ----------------------------------------------------------------
         # THREE-PANEL INPUT ROW: Accounts | VPS Pool | Proxy Pool
@@ -2017,8 +1971,7 @@ class FBHackedRecoveryTool(tk.Tk):
                 semaphore=self._semaphore,
                 vps_list=list(vps_list),
                 proxy_list=list(pool.proxies),
-                window_w=self._window_w_var.get(),
-                window_h=self._window_h_var.get(),
+                auto_refresh_minutes=self._auto_refresh_var.get(),
             )
             self._workers.append(w)
 
@@ -2510,8 +2463,7 @@ class FBHackedRecoveryTool(tk.Tk):
                 "proxy": self.proxy_entry.get("1.0", "end").strip(),
                 "vps_list": getattr(self, '_vps_list', []),
                 "max_concurrent": self._max_concurrent_var.get() if hasattr(self, '_max_concurrent_var') else 5,
-                "window_w": self._window_w_var.get() if hasattr(self, '_window_w_var') else 700,
-                "window_h": self._window_h_var.get() if hasattr(self, '_window_h_var') else 700,
+                "auto_refresh": self._auto_refresh_var.get() if hasattr(self, '_auto_refresh_var') else 30,
             }
             with open(self._STATE_FILE, "w", encoding="utf-8") as f:
                 json.dump(state, f, ensure_ascii=False, indent=2)
@@ -2535,10 +2487,8 @@ class FBHackedRecoveryTool(tk.Tk):
                 self._vps_refresh_listbox()
             if state.get("max_concurrent") and hasattr(self, '_max_concurrent_var'):
                 self._max_concurrent_var.set(state["max_concurrent"])
-            if state.get("window_w") and hasattr(self, '_window_w_var'):
-                self._window_w_var.set(state["window_w"])
-            if state.get("window_h") and hasattr(self, '_window_h_var'):
-                self._window_h_var.set(state["window_h"])
+            if state.get("auto_refresh") is not None and hasattr(self, '_auto_refresh_var'):
+                self._auto_refresh_var.set(state["auto_refresh"])
         except Exception:
             pass
 
