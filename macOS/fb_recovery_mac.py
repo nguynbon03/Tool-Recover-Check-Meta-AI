@@ -1160,6 +1160,10 @@ chrome.webRequest.onAuthRequired.addListener(
         if not driver:
             return False
         try:
+            cur_url = driver.current_url or ""
+            # Chỉ check khi đã thoát khỏi identify/recover — tránh false positive
+            if "identify" in cur_url or ("/recover/" in cur_url and "hacked" not in cur_url):
+                return False
             result = driver.execute_script(SUPPORT_JS)
             if result:
                 self.callbacks["log"](
