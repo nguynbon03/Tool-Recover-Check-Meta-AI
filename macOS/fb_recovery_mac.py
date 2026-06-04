@@ -1825,10 +1825,11 @@ class FBHackedRecoveryTool(tk.Tk):
         for widget in children[1:]:  # skip header
             widget.destroy()
         self._result_rows = {}
-        # Re-add SUCCESS rows
+        # Re-add SUCCESS rows và restore thumbnail
         for email in self._success_emails:
             self._add_result_row(email, "SUCCESS")
             self._update_result_row(email, "SUCCESS")
+        self.after(100, self._restore_success_thumbnails)
 
         proxy_raw = self._parse_proxies()
         pool = ProxyPool(proxy_raw)
@@ -2057,6 +2058,9 @@ class FBHackedRecoveryTool(tk.Tk):
     def _cb_thumbnail(self, email: str, b64_data: str):
         if not HAS_PIL:
             return
+        # Cache latest thumbnail for restore after START
+        if email in self._success_worker_info:
+            self._success_worker_info[email]["last_thumb_b64"] = b64_data
         def _update():
             try:
                 if email not in self._result_rows:
@@ -2075,6 +2079,13 @@ class FBHackedRecoveryTool(tk.Tk):
             except Exception:
                 pass
         self.after(0, _update)
+
+    def _restore_success_thumbnails(self):
+        """Restore thumbnail images for SUCCESS rows after START rebuild."""
+        for email, info in self._success_worker_info.items():
+            b64 = info.get("last_thumb_b64")
+            if b64:
+                self._cb_thumbnail(email, b64)
 
     def _on_thumbnail_click(self, email: str):
         """Bấm thumbnail → mở native WebView window (WKWebView on macOS) với session cookies."""
