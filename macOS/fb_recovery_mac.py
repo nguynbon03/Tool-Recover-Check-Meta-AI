@@ -2103,49 +2103,91 @@ class FBHackedRecoveryTool(tk.Tk):
         except Exception:
             current_url = "https://www.facebook.com"
 
-        def _open_webview(url=current_url, cks=cookies, em=email):
-            import threading
-            def _run():
-                try:
-                    import webview
+        # Mở popup in-app với screenshot live từ headless driver
+        self.after(0, lambda: self._open_success_popup(email, w))
 
-                    win = webview.create_window(
-                        f"✅ {em}",
-                        url="https://www.facebook.com",
-                        width=1200, height=800,
-                        resizable=True
-                    )
+    # ------------------------------------------------------------------
+    def _open_success_popup(self, email: str, worker):
+        """Popup in-app hiển thị screenshot live từ headless driver."""
+        if not hasattr(self, '_success_popups'):
+            self._success_popups = {}
 
-                    def _inject_cookies():
-                        for ck in cks:
-                            name = ck.get('name', '')
-                            value = ck.get('value', '')
-                            domain = ck.get('domain', '')
-                            if name and value:
-                                try:
-                                    safe_name = name.replace("'", "\\'")
-                                    safe_value = value.replace("'", "\\'")
-                                    safe_domain = domain.replace("'", "\\'")
-                                    win.evaluate_js(
-                                        f"document.cookie='{safe_name}={safe_value}; domain={safe_domain}; path=/'"
-                                    )
-                                except Exception:
-                                    pass
-                        # Navigate đến URL đích sau khi inject cookies
-                        try:
-                            win.load_url(url)
-                        except Exception:
-                            pass
+        # Focus popup nếu đang mở
+        existing = self._success_popups.get(email)
+        if existing and existing.winfo_exists():
+            existing.lift(); existing.focus_force(); return
 
-                    win.events.loaded += lambda: _inject_cookies()
-                    webview.start()
-                except Exception as ex:
-                    self._log_append(f"[WebView] Error: {ex}")
+        popup = tk.Toplevel(self)
+        popup.title(f"✅ {email}")
+        popup.configure(bg="#1e1e2e")
+        popup.geometry("960x640")
+        popup.resizable(True, True)
+        self._success_popups[email] = popup
 
-            threading.Thread(target=_run, daemon=True).start()
-            self._log_append(f"[WebView] Opening: {email[:25]}")
+        # URL bar
+        url_frame = tk.Frame(popup, bg="#181825", pady=3)
+        url_frame.pack(fill="x", padx=6)
+        url_var = tk.StringVar(value="Loading...")
+        tk.Label(url_frame, text="🔗", bg="#181825", fg="#6c7086",
+                 font=("Courier", 10)).pack(side="left")
+        tk.Label(url_frame, textvariable=url_var, bg="#181825", fg="#89b4fa",
+                 font=("Courier", 9), anchor="w", wraplength=900).pack(side="left", fill="x", expand=True)
 
-        _open_webview()
+        # Screenshot display
+        img_frame = tk.Frame(popup, bg="#000")
+        img_frame.pack(fill="both", expand=True, padx=6, pady=3)
+        img_lbl = tk.Label(img_frame, bg="#000", cursor="arrow")
+        img_lbl.pack(fill="both", expand=True)
+
+        # Controls
+        ctrl = tk.Frame(popup, bg="#1e1e2e", pady=3)
+        ctrl.pack(fill="x", padx=6)
+        status_var = tk.StringVar(value="●  Live")
+        tk.Label(ctrl, textvariable=status_var, bg="#1e1e2e", fg="#a6e3a1",
+                 font=("Courier", 9)).pack(side="left")
+
+        def _close():
+            self._success_popups.pop(email, None)
+            try: popup.destroy()
+            except Exception: pass
+
+        tk.Button(ctrl, text="✕ Close", command=_close,
+                  bg="#f38ba8", fg="#1e1e2e", relief="flat",
+                  font=("Helvetica", 9, "bold"), padx=8).pack(side="right")
+
+        # Live screenshot loop
+        _active = [True]
+
+        def _refresh():
+            if not _active[0] or not popup.winfo_exists():
+                return
+            try:
+                if worker.driver:
+                    try:
+                        url_var.set(worker.driver.current_url)
+                    except Exception:
+                        pass
+                    import io
+                    png = worker.driver.get_screenshot_as_png()
+                    img = Image.open(io.BytesIO(png))
+                    pw = max(img_frame.winfo_width() or 900, 900)
+                    ph = max(img_frame.winfo_height() or 540, 540)
+                    img.thumbnail((pw, ph), Image.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    img_lbl.configure(image=photo)
+                    img_lbl.image = photo
+                    status_var.set(f"●  Live  {img.width}×{img.height}")
+            except Exception as ex:
+                status_var.set(f"⚠  {str(ex)[:50]}")
+            if _active[0] and popup.winfo_exists():
+                popup.after(1500, _refresh)
+
+        def _on_close():
+            _active[0] = False
+            _close()
+
+        popup.protocol("WM_DELETE_WINDOW", _on_close)
+        popup.after(200, _refresh)
 
     # ------------------------------------------------------------------
     _STATE_FILE = os.path.expanduser("~/.fb_recovery_state.json")
