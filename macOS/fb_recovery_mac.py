@@ -2108,11 +2108,11 @@ class FBHackedRecoveryTool(tk.Tk):
 
     # ------------------------------------------------------------------
     def _open_success_popup(self, email: str, worker):
-        """Popup in-app hiển thị screenshot live từ headless driver."""
+        """Popup in-app — interactive remote control của headless Chrome.
+        Click/scroll/type trên popup → forward về Chrome → refresh ảnh ngay."""
         if not hasattr(self, '_success_popups'):
             self._success_popups = {}
 
-        # Focus popup nếu đang mở
         existing = self._success_popups.get(email)
         if existing and existing.winfo_exists():
             existing.lift(); existing.focus_force(); return
@@ -2120,29 +2120,29 @@ class FBHackedRecoveryTool(tk.Tk):
         popup = tk.Toplevel(self)
         popup.title(f"✅ {email}")
         popup.configure(bg="#1e1e2e")
-        popup.geometry("960x640")
+        popup.geometry("960x660")
         popup.resizable(True, True)
         self._success_popups[email] = popup
 
         # URL bar
         url_frame = tk.Frame(popup, bg="#181825", pady=3)
         url_frame.pack(fill="x", padx=6)
-        url_var = tk.StringVar(value="Loading...")
         tk.Label(url_frame, text="🔗", bg="#181825", fg="#6c7086",
                  font=("Courier", 10)).pack(side="left")
+        url_var = tk.StringVar(value="Loading...")
         tk.Label(url_frame, textvariable=url_var, bg="#181825", fg="#89b4fa",
                  font=("Courier", 9), anchor="w", wraplength=900).pack(side="left", fill="x", expand=True)
 
-        # Screenshot display
+        # Screenshot display — cursor crosshair = clickable
         img_frame = tk.Frame(popup, bg="#000")
         img_frame.pack(fill="both", expand=True, padx=6, pady=3)
-        img_lbl = tk.Label(img_frame, bg="#000", cursor="arrow")
+        img_lbl = tk.Label(img_frame, bg="#000", cursor="crosshair")
         img_lbl.pack(fill="both", expand=True)
 
         # Controls
         ctrl = tk.Frame(popup, bg="#1e1e2e", pady=3)
         ctrl.pack(fill="x", padx=6)
-        status_var = tk.StringVar(value="●  Live")
+        status_var = tk.StringVar(value="●  Live — Click to interact")
         tk.Label(ctrl, textvariable=status_var, bg="#1e1e2e", fg="#a6e3a1",
                  font=("Courier", 9)).pack(side="left")
 
@@ -2155,11 +2155,18 @@ class FBHackedRecoveryTool(tk.Tk):
                   bg="#f38ba8", fg="#1e1e2e", relief="flat",
                   font=("Helvetica", 9, "bold"), padx=8).pack(side="right")
 
-        # Live screenshot loop
-        _active = [True]
+        # Track browser size and displayed image size for coordinate mapping
+        _state = {
+            "active": True,
+            "browser_w": 1280,
+            "browser_h": 800,
+            "disp_w": 1280,
+            "disp_h": 800,
+        }
 
-        def _refresh():
-            if not _active[0] or not popup.winfo_exists():
+        def _refresh_screenshot():
+            """Fetch screenshot and update display. Runs on main thread."""
+            if not _state["active"] or not popup.winfo_exists():
                 return
             try:
                 if worker.driver:
@@ -2167,27 +2174,172 @@ class FBHackedRecoveryTool(tk.Tk):
                         url_var.set(worker.driver.current_url)
                     except Exception:
                         pass
-                    import io
                     png = worker.driver.get_screenshot_as_png()
                     img = Image.open(io.BytesIO(png))
+                    _state["browser_w"], _state["browser_h"] = img.width, img.height
                     pw = max(img_frame.winfo_width() or 900, 900)
-                    ph = max(img_frame.winfo_height() or 540, 540)
+                    ph = max(img_frame.winfo_height() or 520, 520)
                     img.thumbnail((pw, ph), Image.LANCZOS)
+                    _state["disp_w"], _state["disp_h"] = img.width, img.height
                     photo = ImageTk.PhotoImage(img)
                     img_lbl.configure(image=photo)
                     img_lbl.image = photo
-                    status_var.set(f"●  Live  {img.width}×{img.height}")
+                    status_var.set(f"●  Live  {img.width}×{img.height}  — Click to interact")
             except Exception as ex:
-                status_var.set(f"⚠  {str(ex)[:50]}")
-            if _active[0] and popup.winfo_exists():
-                popup.after(1500, _refresh)
+                status_var.set(f"⚠  {str(ex)[:60]}")
+
+        def _schedule_refresh(delay_ms=1500):
+            if _state["active"] and popup.winfo_exists():
+                popup.after(delay_ms, _auto_refresh)
+
+        def _auto_refresh():
+            _refresh_screenshot()
+            _schedule_refresh(1500)
+
+        def _quick_refresh():
+            """Refresh soon after interaction."""
+            if _state["active"] and popup.winfo_exists():
+                popup.after(400, _refresh_screenshot)
+
+        # --- Coordinate mapping ---
+        def _to_browser_coords(event):
+            """Map click in img_lbl widget → browser pixel coords."""
+            lw = img_lbl.winfo_width()
+            lh = img_lbl.winfo_height()
+            dw = _state["disp_w"]
+            dh = _state["disp_h"]
+            bw = _state["browser_w"]
+            bh = _state["browser_h"]
+            if lw <= 0 or lh <= 0 or dw <= 0 or dh <= 0:
+                return None, None
+            # Image is centered in label — compute offset
+            off_x = (lw - dw) / 2
+            off_y = (lh - dh) / 2
+            rel_x = event.x - off_x
+            rel_y = event.y - off_y
+            if rel_x < 0 or rel_y < 0 or rel_x > dw or rel_y > dh:
+                return None, None
+            bx = int(rel_x * bw / dw)
+            by = int(rel_y * bh / dh)
+            return max(0, min(bx, bw - 1)), max(0, min(by, bh - 1))
+
+        # --- Click forwarding ---
+        _CLICK_JS = """
+            var x=arguments[0], y=arguments[1];
+            var el=document.elementFromPoint(x,y);
+            if(el){
+                el.dispatchEvent(new MouseEvent('mouseover',{bubbles:true,clientX:x,clientY:y}));
+                el.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}));
+                el.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}));
+                el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}));
+                if(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT') el.focus();
+            }
+        """
+
+        def _on_click(event):
+            bx, by = _to_browser_coords(event)
+            if bx is None:
+                return
+            status_var.set(f"⟳  Click ({bx},{by})...")
+            def _do():
+                try:
+                    worker.driver.execute_script(_CLICK_JS, bx, by)
+                except Exception:
+                    pass
+                popup.after(0, _quick_refresh)
+            threading.Thread(target=_do, daemon=True).start()
+
+        def _on_right_click(event):
+            bx, by = _to_browser_coords(event)
+            if bx is None:
+                return
+            def _do():
+                try:
+                    worker.driver.execute_script("""
+                        var x=arguments[0],y=arguments[1];
+                        var el=document.elementFromPoint(x,y);
+                        if(el) el.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:x,clientY:y}));
+                    """, bx, by)
+                except Exception:
+                    pass
+                popup.after(0, _quick_refresh)
+            threading.Thread(target=_do, daemon=True).start()
+
+        # --- Keyboard forwarding ---
+        _INPUT_JS = """
+            var el=document.activeElement;
+            if(el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA')){
+                var v=el.value; el.value=v+arguments[0];
+                el.dispatchEvent(new Event('input',{bubbles:true}));
+                el.dispatchEvent(new Event('change',{bubbles:true}));
+            }
+        """
+        _BACKSPACE_JS = """
+            var el=document.activeElement;
+            if(el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA')){
+                el.value=el.value.slice(0,-1);
+                el.dispatchEvent(new Event('input',{bubbles:true}));
+            }
+        """
+        _ENTER_JS = """
+            var el=document.activeElement;
+            if(el){
+                el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',keyCode:13,bubbles:true,cancelable:true}));
+                el.dispatchEvent(new KeyboardEvent('keypress',{key:'Enter',keyCode:13,bubbles:true,cancelable:true}));
+                el.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',keyCode:13,bubbles:true}));
+                if(el.form) el.form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
+            }
+        """
+
+        def _on_key(event):
+            ks = event.keysym
+            ch = event.char
+            def _do():
+                try:
+                    drv = worker.driver
+                    if ks == 'BackSpace':
+                        drv.execute_script(_BACKSPACE_JS)
+                    elif ks in ('Return', 'KP_Enter'):
+                        drv.execute_script(_ENTER_JS)
+                    elif ks == 'Tab':
+                        drv.execute_script(
+                            "var el=document.activeElement; if(el) el.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',keyCode:9,bubbles:true}));"
+                        )
+                    elif ch and ch.isprintable():
+                        drv.execute_script(_INPUT_JS, ch)
+                    else:
+                        return
+                except Exception:
+                    pass
+                popup.after(0, _quick_refresh)
+            threading.Thread(target=_do, daemon=True).start()
+
+        # --- Scroll forwarding ---
+        def _on_scroll(event):
+            delta = event.delta
+            scroll_px = -int(delta / 5) if abs(delta) >= 60 else (-20 if delta > 0 else 20)
+            def _do():
+                try:
+                    worker.driver.execute_script(f"window.scrollBy(0, {scroll_px})")
+                except Exception:
+                    pass
+                popup.after(0, _quick_refresh)
+            threading.Thread(target=_do, daemon=True).start()
+
+        # Bind all interactions
+        img_lbl.bind("<Button-1>", _on_click)
+        img_lbl.bind("<Button-2>", _on_right_click)
+        img_lbl.bind("<Button-3>", _on_right_click)
+        img_lbl.bind("<MouseWheel>", _on_scroll)
+        popup.bind("<Key>", _on_key)
+        popup.focus_set()
 
         def _on_close():
-            _active[0] = False
+            _state["active"] = False
             _close()
 
         popup.protocol("WM_DELETE_WINDOW", _on_close)
-        popup.after(200, _refresh)
+        popup.after(200, _auto_refresh)
 
     # ------------------------------------------------------------------
     _STATE_FILE = os.path.expanduser("~/.fb_recovery_state.json")
