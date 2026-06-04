@@ -2060,14 +2060,18 @@ class FBHackedRecoveryTool(tk.Tk):
             except Exception:
                 cookies = []
 
-            import threading, tempfile
+            import threading, tempfile, json as _json, shutil as _shutil
             def _open(url=current_url, px=proxy_str, cks=cookies, em=email):
                 try:
                     from selenium import webdriver as wd
                     from selenium.webdriver.chrome.options import Options as COptions
                     from selenium.webdriver.chrome.service import Service as CService
 
-                    view_dir = tempfile.mkdtemp(prefix="fb_view_")
+                    # Tạo profile cố định theo email — tồn tại vĩnh viễn, không phải tempdir
+                    safe_name = "".join(c if c.isalnum() else "_" for c in em)
+                    view_dir = os.path.join(os.path.expanduser("~"), ".fb_recovery_views", safe_name)
+                    os.makedirs(view_dir, exist_ok=True)
+
                     opts = COptions()
                     opts.add_argument(f"--user-data-dir={view_dir}")
                     opts.add_argument("--no-first-run")
@@ -2075,17 +2079,14 @@ class FBHackedRecoveryTool(tk.Tk):
                     opts.add_argument("--disable-blink-features=AutomationControlled")
                     if px:
                         if px.startswith("socks5://"):
-                            # SSH tunnel — dùng trực tiếp
                             opts.add_argument(f"--proxy-server={px}")
                         else:
-                            # HTTP proxy có thể có auth (host:port:user:pass)
                             ext_dir = w._make_proxy_extension(px) if hasattr(w, '_make_proxy_extension') else None
                             if ext_dir:
                                 opts.add_argument(f"--load-extension={ext_dir}")
                             else:
                                 opts.add_argument(f"--proxy-server={px}")
                     drv = wd.Chrome(service=CService(), options=opts)
-                    # Navigate facebook trước để set đúng domain
                     drv.get("https://www.facebook.com")
                     # Inject cookies
                     for ck in cks:
@@ -2095,15 +2096,26 @@ class FBHackedRecoveryTool(tk.Tk):
                             drv.add_cookie(ck)
                         except Exception:
                             pass
-                    # Navigate đến URL đích
+                    # Lưu cookies ra file để restore sau nếu cần
+                    try:
+                        with open(os.path.join(view_dir, "fb_cookies.json"), "w") as f:
+                            _json.dump(cks, f)
+                    except Exception:
+                        pass
                     drv.get(url)
-                    # Không quit — Chrome ở lại cho user dùng
+                    # Tách Chrome ra khỏi chromedriver — Chrome sống độc lập
+                    # Detach: Chrome không bị kill khi chromedriver/tool đóng
+                    try:
+                        drv.service.process.kill()  # Kill chromedriver only, Chrome vẫn sống
+                    except Exception:
+                        pass
+                    # Chrome đã detach — tồn tại độc lập, không phụ thuộc tool
                 except Exception as ex:
                     self._log_append(f"[Chrome] Open error: {ex}")
                 finally:
                     self._view_opening.discard(em)
 
-            threading.Thread(target=_open, daemon=True).start()
+            threading.Thread(target=_open, daemon=False).start()  # non-daemon: thread hoàn thành trước khi tool exit
             self._log_append(f"[Chrome] Opening: {email[:25]} proxy={proxy_str or 'none'}")
         except Exception as e:
             self._view_opening.discard(email)
