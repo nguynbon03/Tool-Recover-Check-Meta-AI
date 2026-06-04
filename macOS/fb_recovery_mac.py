@@ -1881,16 +1881,8 @@ class FBHackedRecoveryTool(tk.Tk):
 
         # Giữ lại SUCCESS workers — Chrome của họ vẫn mở, không đụng
         self._workers = [w for w in self._workers if w.email in self._success_emails]
-        self._log_append("[STOP] Done. SUCCESS kept. Restarting non-success accounts...")
+        self._log_append("[STOP] Done. SUCCESS kept. Press START to retry remaining accounts.")
         self.after(100, self._update_stats)
-
-        # Tự động restart ngay sau 1.5s với các nick chưa success
-        def _auto_restart():
-            time.sleep(1.5)
-            self.after(0, self.start_threads)
-
-        import threading as _th
-        _th.Thread(target=_auto_restart, daemon=True).start()
 
     # ------------------------------------------------------------------
     def _add_result_row(self, email: str, status: str):
