@@ -1054,6 +1054,7 @@ class FBHackedRecoveryTool(tk.Tk):
         self._semaphore: threading.Semaphore = threading.Semaphore(5)
         self._success_emails: set = set()  # emails đã SUCCESS — Chrome giữ nguyên
         self._success_worker_info: dict = {}  # email → {driver, proxy, tunnel, url} — giữ sau STOP
+        self._view_drivers: dict = {}  # email → selenium driver của Chrome view đang mở
         self._lock = threading.Lock()
         self._loop_active = False   # True khi đang chạy vòng lặp vô hạn
         self._loop_stop = threading.Event()  # set() để dừng vòng lặp
@@ -2074,8 +2075,15 @@ class FBHackedRecoveryTool(tk.Tk):
                     from selenium.webdriver.chrome.options import Options as COptions
                     from selenium.webdriver.chrome.service import Service as CService
 
+                    # Kill Chrome view cũ của email này nếu còn mở
+                    old_drv = self._view_drivers.pop(em, None)
+                    if old_drv:
+                        try:
+                            old_drv.quit()
+                        except Exception:
+                            pass
+
                     # Dùng profile_dir của Chrome headless đang chạy nếu có
-                    # Nếu không có, dùng save_dir cố định theo email
                     use_dir = pdir if (pdir and os.path.isdir(pdir)) else sdir
 
                     opts = COptions()
@@ -2136,6 +2144,8 @@ class FBHackedRecoveryTool(tk.Tk):
 
                     # Mở Chrome thường với ĐÚNG profile đó — 1 Chrome duy nhất
                     drv = wd.Chrome(service=CService(), options=opts)
+                    # Lưu driver để có thể kill khi click lại
+                    self._view_drivers[em] = drv
                     drv.get(url)
                     # Chrome ở lại cho user — tool không can thiệp gì nữa
 
