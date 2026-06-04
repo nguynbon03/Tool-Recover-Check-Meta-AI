@@ -42,10 +42,27 @@ RECOVERY_URL = (
 )
 
 SUPPORT_JS = """
+const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
+const els = document.querySelectorAll("button,a,div[role='button'],span");
+for (const el of els) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width===0||rect.height===0) continue;
+    if (rect.left < vw*0.7 || rect.top < vh*0.8) continue;
+    const style = getComputedStyle(el);
+    if (style.display==='none'||style.visibility==='hidden'||style.opacity==='0') continue;
+    const tag = el.tagName;
+    const role = el.getAttribute('role');
+    const isClickable = tag==='BUTTON' || tag==='A' || role==='button' || style.cursor==='pointer';
+    if (!isClickable) continue;
+    const txt = (el.innerText||'').trim();
+    if (txt) return txt;
+    return "bottom-right-interactive";
+}
 const targets = ["Nhận hỗ trợ","Get support","Get Support","Contact support",
                  "Liên hệ hỗ trợ","Chat với AI","Chat with AI"];
-const els = document.querySelectorAll("button,a,div[role='button'],span,div");
-for (const el of els) {
+const els2 = document.querySelectorAll("button,a,div[role='button'],span,div");
+for (const el of els2) {
     const txt = (el.innerText||'').trim();
     if (txt.length > 90) continue;
     const rect = el.getBoundingClientRect();
@@ -1039,6 +1056,40 @@ chrome.webRequest.onAuthRequired.addListener(
                 return True
         except Exception as exc:
             self.callbacks["log"](self.email, f"[Support check] {exc}")
+        # Selenium CSS-selector fallback for bottom-right interactive elements
+        try:
+            vw_vh = driver.execute_script("return [window.innerWidth, window.innerHeight];")
+            vw, vh = vw_vh[0], vw_vh[1]
+            if vw and vh:
+                cutoff_x = vw * 0.7
+                cutoff_y = vh * 0.8
+                candidates = driver.find_elements(
+                    By.CSS_SELECTOR,
+                    "button, a, div[role='button'], span"
+                )
+                for el in candidates:
+                    try:
+                        if not el.is_displayed():
+                            continue
+                        loc = el.location
+                        size = el.size
+                        if loc['x'] + size['width'] < cutoff_x or loc['y'] + size['height'] < cutoff_y:
+                            continue
+                        tag = el.tag_name
+                        role = el.get_attribute("role")
+                        cursor = driver.execute_script(
+                            "return getComputedStyle(arguments[0]).cursor;", el
+                        )
+                        is_clickable = tag in ("button", "a") or role == "button" or cursor == "pointer"
+                        if is_clickable:
+                            txt = (el.text or "").strip()
+                            label = txt if txt else "bottom-right-interactive"
+                            self.callbacks["log"](self.email, f"[Support] Found element (selenium): '{label}'")
+                            return True
+                    except Exception:
+                        continue
+        except Exception as exc2:
+            self.callbacks["log"](self.email, f"[Support selenium fallback] {exc2}")
         return False
 
 
