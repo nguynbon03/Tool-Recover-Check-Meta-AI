@@ -1656,32 +1656,34 @@ class FBHackedRecoveryTool(tk.Tk):
                 self._results_window, width=e.width
             )
         )
-        # Mouse wheel scroll — bind trực tiếp lên canvas + frame + propagate từ children
+        # Mouse wheel scroll — dùng bind_all chỉ khi hover vào results area
+        _results_hover = [False]
+
         def _scroll_results(e):
+            if not _results_hover[0]:
+                return
             delta = e.delta
-            # macOS trackpad: delta nhỏ (~3-10), chuột: delta = 120
             if delta == 0:
                 return
             units = int(-1 * delta / 120) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
             self.results_canvas.yview_scroll(units, "units")
 
-        # Bind trực tiếp — không dùng bind_all để tránh conflict với log box
-        self.results_canvas.bind("<MouseWheel>", _scroll_results)
-        self.results_frame.bind("<MouseWheel>", _scroll_results)
+        def _on_results_enter(e):
+            _results_hover[0] = True
 
-        def _rebind_children(widget):
-            """Bind scroll cho tất cả child widgets trong results."""
-            try:
-                widget.bind("<MouseWheel>", _scroll_results)
-                for child in widget.winfo_children():
-                    _rebind_children(child)
-            except Exception:
-                pass
+        def _on_results_leave(e):
+            _results_hover[0] = False
 
-        # Rebind khi có row mới thêm vào
+        # bind_all cho MouseWheel — hoạt động dù focus ở đâu trong results
+        self.bind_all("<MouseWheel>", _scroll_results)
+
+        # Track hover để không steal scroll từ log box
+        for _w in (self.results_canvas, self.results_frame, results_container):
+            _w.bind("<Enter>", _on_results_enter)
+            _w.bind("<Leave>", _on_results_leave)
+
         def _on_results_configure(e):
             self.results_canvas.configure(scrollregion=self.results_canvas.bbox("all"))
-            _rebind_children(self.results_frame)
 
         self.results_frame.bind("<Configure>", _on_results_configure)
 
