@@ -393,6 +393,8 @@ class AccountWorker(threading.Thread):
         semaphore: Optional[threading.Semaphore] = None,
         vps_list: Optional[list] = None,
         proxy_list: Optional[list] = None,
+        window_w: int = 700,
+        window_h: int = 700,
     ):
         super().__init__(daemon=True)
         self.email = email
@@ -409,6 +411,8 @@ class AccountWorker(threading.Thread):
         self._proxy_list = proxy_list or ([proxy] if proxy else [])
         self._screenshot_active = False
         self._proxy_bridge = None
+        self.window_w = window_w
+        self.window_h = window_h
 
     def _start_tunnel(self) -> Optional[str]:
         """Start SSH tunnel nếu có VPS. Return proxy_url hoặc None."""
@@ -531,7 +535,7 @@ class AccountWorker(threading.Thread):
         options = Options()
         fp = FingerprintProfile(self.email).generate()
         options.add_argument(f"user-agent={DESKTOP_UA}")
-        options.add_argument("--window-size=1280,900")
+        options.add_argument(f"--window-size={self.window_w},{self.window_h}")
         # headless=new — ẩn hoàn toàn, thumbnail vẫn hoạt động qua CDP screenshot
         options.add_argument("--headless=new")
         options.add_argument("--disable-blink-features=AutomationControlled")
@@ -1274,6 +1278,36 @@ class FBHackedRecoveryTool(tk.Tk):
             font=("Helvetica", 11),
         ).pack(side="left", padx=(8, 0))
 
+        tk.Label(
+            concurrent_row, text="Window W:",
+            bg="#1e1e2e", fg="#cdd6f4", font=("Helvetica", 11)
+        ).pack(side="left", padx=(16, 0))
+        self._window_w_var = tk.IntVar(value=700)
+        tk.Spinbox(
+            concurrent_row,
+            from_=400, to=1920,
+            textvariable=self._window_w_var,
+            width=5,
+            bg="#313244", fg="#cdd6f4",
+            buttonbackground="#45475a",
+            font=("Helvetica", 11),
+        ).pack(side="left", padx=(4, 0))
+
+        tk.Label(
+            concurrent_row, text="H:",
+            bg="#1e1e2e", fg="#cdd6f4", font=("Helvetica", 11)
+        ).pack(side="left", padx=(8, 0))
+        self._window_h_var = tk.IntVar(value=700)
+        tk.Spinbox(
+            concurrent_row,
+            from_=400, to=1080,
+            textvariable=self._window_h_var,
+            width=5,
+            bg="#313244", fg="#cdd6f4",
+            buttonbackground="#45475a",
+            font=("Helvetica", 11),
+        ).pack(side="left", padx=(4, 0))
+
         # ----------------------------------------------------------------
         # THREE-PANEL INPUT ROW: Accounts | VPS Pool | Proxy Pool
         # ----------------------------------------------------------------
@@ -1983,6 +2017,8 @@ class FBHackedRecoveryTool(tk.Tk):
                 semaphore=self._semaphore,
                 vps_list=list(vps_list),
                 proxy_list=list(pool.proxies),
+                window_w=self._window_w_var.get(),
+                window_h=self._window_h_var.get(),
             )
             self._workers.append(w)
 
@@ -2474,6 +2510,8 @@ class FBHackedRecoveryTool(tk.Tk):
                 "proxy": self.proxy_entry.get("1.0", "end").strip(),
                 "vps_list": getattr(self, '_vps_list', []),
                 "max_concurrent": self._max_concurrent_var.get() if hasattr(self, '_max_concurrent_var') else 5,
+                "window_w": self._window_w_var.get() if hasattr(self, '_window_w_var') else 700,
+                "window_h": self._window_h_var.get() if hasattr(self, '_window_h_var') else 700,
             }
             with open(self._STATE_FILE, "w", encoding="utf-8") as f:
                 json.dump(state, f, ensure_ascii=False, indent=2)
@@ -2497,6 +2535,10 @@ class FBHackedRecoveryTool(tk.Tk):
                 self._vps_refresh_listbox()
             if state.get("max_concurrent") and hasattr(self, '_max_concurrent_var'):
                 self._max_concurrent_var.set(state["max_concurrent"])
+            if state.get("window_w") and hasattr(self, '_window_w_var'):
+                self._window_w_var.set(state["window_w"])
+            if state.get("window_h") and hasattr(self, '_window_h_var'):
+                self._window_h_var.set(state["window_h"])
         except Exception:
             pass
 
