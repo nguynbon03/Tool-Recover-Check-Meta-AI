@@ -2124,15 +2124,6 @@ class FBHackedRecoveryTool(tk.Tk):
         popup.resizable(True, True)
         self._success_popups[email] = popup
 
-        # URL bar
-        url_frame = tk.Frame(popup, bg="#181825", pady=3)
-        url_frame.pack(fill="x", padx=6)
-        tk.Label(url_frame, text="🔗", bg="#181825", fg="#6c7086",
-                 font=("Courier", 10)).pack(side="left")
-        url_var = tk.StringVar(value="Loading...")
-        tk.Label(url_frame, textvariable=url_var, bg="#181825", fg="#89b4fa",
-                 font=("Courier", 9), anchor="w", wraplength=900).pack(side="left", fill="x", expand=True)
-
         # Screenshot display — cursor crosshair = clickable
         img_frame = tk.Frame(popup, bg="#000")
         img_frame.pack(fill="both", expand=True, padx=6, pady=3)
@@ -2164,37 +2155,41 @@ class FBHackedRecoveryTool(tk.Tk):
             "disp_h": 800,
         }
 
-        def _refresh_screenshot():
-            """Fetch screenshot and update display. Runs on main thread."""
+        def _apply_image(img):
+            """Apply a pre-fetched PIL image to the display. Runs on main thread."""
+            if not _state["active"] or not popup.winfo_exists():
+                return
+            _state["browser_w"], _state["browser_h"] = img.width, img.height
+            pw = max(img_frame.winfo_width() or 900, 900)
+            ph = max(img_frame.winfo_height() or 520, 520)
+            img.thumbnail((pw, ph), Image.LANCZOS)
+            _state["disp_w"], _state["disp_h"] = img.width, img.height
+            photo = ImageTk.PhotoImage(img)
+            img_lbl.configure(image=photo)
+            img_lbl.image = photo
+            status_var.set(f"●  Live  {img.width}×{img.height}  — Click to interact")
+
+        def _fetch_and_update():
+            """Fetch screenshot from Selenium in background thread; post result to main thread."""
             if not _state["active"] or not popup.winfo_exists():
                 return
             try:
                 if worker.driver:
-                    try:
-                        url_var.set(worker.driver.current_url)
-                    except Exception:
-                        pass
                     png = worker.driver.get_screenshot_as_png()
                     img = Image.open(io.BytesIO(png))
-                    _state["browser_w"], _state["browser_h"] = img.width, img.height
-                    pw = max(img_frame.winfo_width() or 900, 900)
-                    ph = max(img_frame.winfo_height() or 520, 520)
-                    img.thumbnail((pw, ph), Image.LANCZOS)
-                    _state["disp_w"], _state["disp_h"] = img.width, img.height
-                    photo = ImageTk.PhotoImage(img)
-                    img_lbl.configure(image=photo)
-                    img_lbl.image = photo
-                    status_var.set(f"●  Live  {img.width}×{img.height}  — Click to interact")
+                    popup.after(0, lambda img=img: _apply_image(img))
             except Exception as ex:
-                status_var.set(f"⚠  {str(ex)[:60]}")
+                popup.after(0, lambda: status_var.set(f"⚠  {str(ex)[:60]}"))
 
-        def _schedule_refresh(delay_ms=1500):
-            if _state["active"] and popup.winfo_exists():
-                popup.after(delay_ms, _auto_refresh)
+        def _refresh_screenshot():
+            """Start background fetch of screenshot. Non-blocking."""
+            if not _state["active"] or not popup.winfo_exists():
+                return
+            threading.Thread(target=_fetch_and_update, daemon=True).start()
 
         def _auto_refresh():
             _refresh_screenshot()
-            _schedule_refresh(1500)
+            popup.after(1500, _auto_refresh)
 
         def _quick_refresh():
             """Refresh soon after interaction."""
