@@ -2330,7 +2330,10 @@ class FBHackedRecoveryTool(tk.Tk):
         popup = tk.Toplevel(self)
         popup.title(f"✅ {email}")
         popup.configure(bg="#1e1e2e")
-        popup.geometry("960x660")
+        # Full-screen popup — chiếm toàn bộ màn hình
+        sw = popup.winfo_screenwidth()
+        sh = popup.winfo_screenheight()
+        popup.geometry(f"{sw}x{sh}+0+0")
         popup.resizable(True, True)
         self._success_popups[email] = popup
 
@@ -2377,9 +2380,52 @@ class FBHackedRecoveryTool(tk.Tk):
             except Exception as ex:
                 status_var.set(f"Copy failed: {ex}")
 
+        def _open_chrome():
+            """Mở Chrome thật với cùng session (profile + cookies) để user tương tác trực tiếp."""
+            def _do():
+                try:
+                    drv = worker.driver
+                    if not drv:
+                        popup.after(0, lambda: status_var.set("⚠ No active session"))
+                        return
+                    # Lấy current URL
+                    cur_url = drv.current_url
+                    # Lấy profile dir từ Chrome options
+                    caps = drv.capabilities or {}
+                    chrome_args = caps.get("goog:chromeOptions", {}).get("args", [])
+                    profile_dir = ""
+                    for a in chrome_args:
+                        if a.startswith("--user-data-dir="):
+                            profile_dir = a.split("=", 1)[1]
+                            break
+                    # Export cookies sang visible Chrome
+                    cookies = drv.get_cookies()
+                    # Mở Chrome hiển thị với cùng profile
+                    import subprocess as _sp
+                    chrome_paths = [
+                        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+                    ]
+                    chrome_bin = next((p for p in chrome_paths if os.path.exists(p)), None)
+                    if not chrome_bin:
+                        popup.after(0, lambda: status_var.set("⚠ Chrome not found"))
+                        return
+                    cmd = [chrome_bin]
+                    if profile_dir:
+                        cmd += [f"--user-data-dir={profile_dir}"]
+                    cmd += ["--new-window", cur_url]
+                    _sp.Popen(cmd)
+                    popup.after(0, lambda: status_var.set(f"Chrome opened: {cur_url[:50]}"))
+                except Exception as ex:
+                    popup.after(0, lambda e=ex: status_var.set(f"Open Chrome failed: {e}"))
+            threading.Thread(target=_do, daemon=True).start()
+
         tk.Button(ctrl, text="⎘ Copy URL", command=_copy_url,
                   bg="#89dceb", fg="#1e1e2e", relief="flat",
                   font=("Helvetica", 9), padx=6).pack(side="right", padx=2)
+        tk.Button(ctrl, text="🌐 Open Chrome", command=_open_chrome,
+                  bg="#a6e3a1", fg="#1e1e2e", relief="flat",
+                  font=("Helvetica", 9, "bold"), padx=8).pack(side="right", padx=2)
         tk.Button(ctrl, text="✕ Close", command=_close,
                   bg="#f38ba8", fg="#1e1e2e", relief="flat",
                   font=("Helvetica", 9, "bold"), padx=8).pack(side="right")
