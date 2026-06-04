@@ -42,44 +42,27 @@ RECOVERY_URL = (
 )
 
 SUPPORT_JS = """
-// Detect ANY visible interactive element at bottom-right of viewport
-const vw = window.innerWidth || document.documentElement.clientWidth;
-const vh = window.innerHeight || document.documentElement.clientHeight;
-const ZONE_X = vw * 0.6;   // right 40% of screen
-const ZONE_Y = vh * 0.6;   // bottom 40% of screen
-
+// Detect support/chat button — CHỈ match text chính xác, không fallback button chung
 const textTargets = ["nhận hỗ trợ","get support","contact support",
                      "liên hệ hỗ trợ","chat với ai","chat with ai",
-                     "help","hỗ trợ","support"];
+                     "meta ai support","hỗ trợ qua chat","support assistant"];
 const els = document.querySelectorAll(
-    "button,a,div[role='button'],div[role='dialog'],span[role='button']," +
-    "[data-testid],[aria-label],[class*='support'],[class*='help'],[class*='chat']"
+    "button,a,div[role='button'],span[role='button']"
 );
-let best = null;
 for (const el of els) {
     const txt = (el.innerText || el.getAttribute('aria-label') || '').trim();
-    if (txt.length > 120) continue;
+    if (txt.length === 0 || txt.length > 120) continue;
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) continue;
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
     const style = getComputedStyle(el);
     if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) < 0.1) continue;
     if (el.closest('#pageFooter,footer,[role="navigation"]')) continue;
-    // Ưu tiên: text match
     const low = txt.toLowerCase();
     for (const t of textTargets) {
-        if (low.includes(t)) return txt || ("button@" + Math.round(cx) + "x" + Math.round(cy));
-    }
-    // Fallback: bất kỳ element clickable ở góc dưới phải
-    if (cx >= ZONE_X && cy >= ZONE_Y) {
-        const tag = el.tagName.toLowerCase();
-        if (tag === 'button' || tag === 'a' || el.getAttribute('role') === 'button') {
-            best = best || (txt || tag + "@" + Math.round(cx) + "x" + Math.round(cy));
-        }
+        if (low.includes(t)) return txt;
     }
 }
-return best;
+return null;
 """
 
 
@@ -1668,6 +1651,8 @@ class FBHackedRecoveryTool(tk.Tk):
             units = int(-1 * delta / 120) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
             self.results_canvas.yview_scroll(units, "units")
 
+        self._scroll_results_fn = _scroll_results  # lưu để dùng từ log panel
+
         def _on_results_enter(e):
             _results_hover[0] = True
 
@@ -1779,7 +1764,8 @@ class FBHackedRecoveryTool(tk.Tk):
             self.unbind_all("<MouseWheel>")
         def _on_leave_log(e):
             # Rebind lại để results scroll hoạt động sau khi rời log box
-            self.bind_all("<MouseWheel>", _scroll_results)
+            if hasattr(self, '_scroll_results_fn'):
+                self.bind_all("<MouseWheel>", self._scroll_results_fn)
         self.log_box.bind("<Enter>", _on_enter_log)
         self.log_box.bind("<Leave>", _on_leave_log)
 
