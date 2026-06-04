@@ -1868,19 +1868,29 @@ class FBHackedRecoveryTool(tk.Tk):
 
     # ------------------------------------------------------------------
     def stop_all(self):
-        # Dừng vòng lặp vô hạn
+        self._log_append("[STOP] Stopping all workers...")
+
+        # Dừng vòng lặp auto-restart tạm thời trong khi reset
         self._loop_active = False
         self._loop_stop.set()
 
-        self._log_append("[STOP] Stopping all workers...")
         for w in self._workers:
             w._stop.set()
             if w.email not in self._success_emails:
                 w.quit_driver()  # chỉ đóng Chrome của non-SUCCESS
-        # Giữ lại SUCCESS workers để Chrome vẫn mở
+
+        # Giữ lại SUCCESS workers — Chrome của họ vẫn mở, không đụng
         self._workers = [w for w in self._workers if w.email in self._success_emails]
-        self._log_append("[STOP] Done. SUCCESS Chrome windows kept open.")
+        self._log_append("[STOP] Done. SUCCESS kept. Restarting non-success accounts...")
         self.after(100, self._update_stats)
+
+        # Tự động restart ngay sau 1.5s với các nick chưa success
+        def _auto_restart():
+            time.sleep(1.5)
+            self.after(0, self.start_threads)
+
+        import threading as _th
+        _th.Thread(target=_auto_restart, daemon=True).start()
 
     # ------------------------------------------------------------------
     def _add_result_row(self, email: str, status: str):
