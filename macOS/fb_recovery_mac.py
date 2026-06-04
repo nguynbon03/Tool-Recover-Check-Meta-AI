@@ -1633,8 +1633,8 @@ class FBHackedRecoveryTool(tk.Tk):
                                      highlightthickness=1, highlightbackground="#313244")
         results_container.pack(fill="both", expand=True, pady=(4, 0))
 
-        results_scroll = tk.Scrollbar(results_container, bg="#313244", troughcolor="#1e1e2e",
-                                      relief="flat", width=8)
+        results_scroll = tk.Scrollbar(results_container, bg="#585b70", troughcolor="#1e1e2e",
+                                      activebackground="#89b4fa", relief="flat", width=16)
         results_scroll.pack(side="right", fill="y")
 
         self.results_canvas = tk.Canvas(
@@ -2374,11 +2374,12 @@ class FBHackedRecoveryTool(tk.Tk):
         popup = tk.Toplevel(self)
         popup.title(f"✅ {email}")
         popup.configure(bg="#1e1e2e")
-        # Full-screen popup — chiếm toàn bộ màn hình
+        # Full-screen popup — maximize window
         sw = popup.winfo_screenwidth()
         sh = popup.winfo_screenheight()
         popup.geometry(f"{sw}x{sh}+0+0")
         popup.resizable(True, True)
+        popup.after(100, lambda: popup.wm_attributes('-zoomed', True))
         self._success_popups[email] = popup
 
         # Session info bar — proxy + cookie status
@@ -2446,14 +2447,19 @@ class FBHackedRecoveryTool(tk.Tk):
                     vis_options.add_argument("--disable-notifications")
                     vis_options.add_experimental_option("excludeSwitches", ["enable-automation"])
                     vis_options.add_experimental_option("useAutomationExtension", False)
-                    # Thêm proxy giống worker
+                    # Thêm proxy giống worker — dùng extension nếu có auth (ip:port:user:pass)
+                    _vis_proxy_ext_dir = None
                     try:
                         if worker._tunnel and worker._tunnel._proc and worker._tunnel._proc.poll() is None:
                             turl = worker._tunnel.proxy_url()
                             if turl:
                                 vis_options.add_argument(f"--proxy-server={turl}")
                         elif worker.proxy:
-                            vis_options.add_argument(f"--proxy-server={worker.proxy}")
+                            _vis_proxy_ext_dir = worker._make_proxy_extension(worker.proxy)
+                            if _vis_proxy_ext_dir:
+                                vis_options.add_argument(f"--load-extension={_vis_proxy_ext_dir}")
+                            else:
+                                vis_options.add_argument(f"--proxy-server={worker.proxy}")
                     except Exception:
                         pass
 
@@ -2502,9 +2508,12 @@ class FBHackedRecoveryTool(tk.Tk):
             if not _state["active"] or not popup.winfo_exists():
                 return
             _state["browser_w"], _state["browser_h"] = img.width, img.height
-            pw = max(img_frame.winfo_width() or 900, 900)
-            ph = max(img_frame.winfo_height() or 520, 520)
-            img.thumbnail((pw, ph), Image.LANCZOS)
+            pw = max(img_frame.winfo_width() or sw, sw)
+            ph = max(img_frame.winfo_height() or sh - 80, sh - 80)
+            # Scale to fill the frame (up or down), preserve aspect ratio
+            ratio = min(pw / img.width, ph / img.height)
+            nw, nh = int(img.width * ratio), int(img.height * ratio)
+            img = img.resize((nw, nh), Image.LANCZOS)
             _state["disp_w"], _state["disp_h"] = img.width, img.height
             photo = ImageTk.PhotoImage(img)
             img_lbl.configure(image=photo)
