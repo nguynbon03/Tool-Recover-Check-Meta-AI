@@ -1656,21 +1656,27 @@ class FBHackedRecoveryTool(tk.Tk):
                 self._results_window, width=e.width
             )
         )
-        # Mouse wheel scroll — bind trực tiếp lên từng widget trong vùng results
+        # Mouse wheel scroll — bind_all + walk parent tree để check widget trong results_container
+        _rc_id = str(results_container)
+
         def _scroll_results(e):
-            delta = e.delta
-            if delta == 0:
-                return
-            units = int(-1 * delta / 120) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
-            self.results_canvas.yview_scroll(units, "units")
-            return "break"
+            # Walk lên parent tree của widget nhận event
+            w = e.widget
+            try:
+                while w:
+                    if str(w) == _rc_id:
+                        delta = e.delta
+                        if delta == 0:
+                            return
+                        units = int(-1 * delta / 120) if abs(delta) >= 120 else (-1 if delta > 0 else 1)
+                        self.results_canvas.yview_scroll(units, "units")
+                        return "break"
+                    w = w.master
+            except Exception:
+                pass
 
-        # Lưu để dùng lại khi tạo result rows mới
         self._results_scroll_fn = _scroll_results
-
-        # Bind trực tiếp — chỉ fire khi chuột đang hover đúng widget đó
-        for _w in (self.results_canvas, self.results_frame, results_container, results_scroll):
-            _w.bind("<MouseWheel>", _scroll_results)
+        self.bind_all("<MouseWheel>", _scroll_results)
 
         def _on_results_configure(e):
             self.results_canvas.configure(scrollregion=self.results_canvas.bbox("all"))
@@ -2214,10 +2220,6 @@ class FBHackedRecoveryTool(tk.Tk):
         thumb_lbl.bind("<Button-1>", lambda e, em=email: self._on_thumbnail_click(em))
 
         self._result_rows[email] = (lbl, icon_lbl, thumb_lbl)
-        # Bind scroll cho tất cả widget trong row để lăn chuột luôn hoạt động
-        if hasattr(self, '_results_scroll_fn'):
-            for _w in row.winfo_children() + [row]:
-                _w.bind("<MouseWheel>", self._results_scroll_fn)
 
     def _update_result_row(self, email: str, status: str):
         entry = self._result_rows.get(email)
@@ -2368,10 +2370,10 @@ class FBHackedRecoveryTool(tk.Tk):
         popup = tk.Toplevel(self)
         popup.title(f"✅ {email}")
         popup.configure(bg="#1e1e2e")
-        # Popup kích thước Chrome bình thường, căn giữa màn hình
+        # Popup vừa phải, căn giữa màn hình
         sw = popup.winfo_screenwidth()
         sh = popup.winfo_screenheight()
-        pw, ph = min(1280, sw - 40), min(860, sh - 60)
+        pw, ph = min(960, sw - 40), min(680, sh - 60)
         px, py = (sw - pw) // 2, (sh - ph) // 2
         popup.geometry(f"{pw}x{ph}+{px}+{py}")
         popup.resizable(True, True)
