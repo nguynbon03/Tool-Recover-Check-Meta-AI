@@ -2037,15 +2037,14 @@ class FBHackedRecoveryTool(tk.Tk):
             elif w.proxy:
                 proxy_str = w.proxy
 
-            # Lấy --user-data-dir từ cmdline của Chrome process
+            # Lấy --user-data-dir của Chrome headless đang chạy
             profile_dir = None
             try:
                 drv_pid = w.driver.service.process.pid
                 r = subprocess.run(["pgrep", "-P", str(drv_pid)], capture_output=True, text=True)
                 for cpid in r.stdout.strip().split():
                     pr = subprocess.run(["ps", "-p", cpid, "-o", "command="], capture_output=True, text=True)
-                    cmd = pr.stdout
-                    for part in cmd.split():
+                    for part in pr.stdout.split():
                         if part.startswith("--user-data-dir="):
                             profile_dir = part.split("=", 1)[1]
                             break
@@ -2054,80 +2053,95 @@ class FBHackedRecoveryTool(tk.Tk):
             except Exception:
                 pass
 
-            # Lấy cookies từ driver để inject vào Chrome mới
+            import threading, json as _json
+
+            # Lưu session ra disk (email cố định) để restore sau nếu cần
+            safe_name = "".join(c if c.isalnum() else "_" for c in email)
+            save_dir = os.path.join(os.path.expanduser("~"), ".fb_recovery_views", safe_name)
+            os.makedirs(save_dir, exist_ok=True)
             try:
                 cookies = list(w.driver.get_cookies())
+                with open(os.path.join(save_dir, "session.json"), "w", encoding="utf-8") as f:
+                    _json.dump({"email": email, "url": current_url, "proxy": proxy_str, "cookies": cookies}, f, ensure_ascii=False, indent=2)
             except Exception:
                 cookies = []
 
-            import threading, json as _json
-
-            # Profile cố định theo email — tồn tại mãi mãi trên disk
-            safe_name = "".join(c if c.isalnum() else "_" for c in email)
-            view_dir = os.path.join(os.path.expanduser("~"), ".fb_recovery_views", safe_name)
-            os.makedirs(view_dir, exist_ok=True)
-
-            # Lưu toàn bộ cookies + proxy + URL vào profile để restore bất cứ lúc nào
-            session_data = {
-                "email": email,
-                "url": current_url,
-                "proxy": proxy_str,
-                "cookies": cookies,
-            }
-            try:
-                with open(os.path.join(view_dir, "session.json"), "w", encoding="utf-8") as f:
-                    _json.dump(session_data, f, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
-
-            def _open(url=current_url, px=proxy_str, cks=cookies, em=email, vdir=view_dir):
+            def _show(url=current_url, px=proxy_str, pdir=profile_dir, cks=cookies, em=email, sdir=save_dir):
                 try:
                     from selenium import webdriver as wd
                     from selenium.webdriver.chrome.options import Options as COptions
                     from selenium.webdriver.chrome.service import Service as CService
 
+                    # Dùng profile_dir của Chrome headless đang chạy nếu có
+                    # Nếu không có, dùng save_dir cố định theo email
+                    use_dir = pdir if (pdir and os.path.isdir(pdir)) else sdir
+
                     opts = COptions()
-                    opts.add_argument(f"--user-data-dir={vdir}")
+                    opts.add_argument(f"--user-data-dir={use_dir}")
                     opts.add_argument("--no-first-run")
                     opts.add_argument("--no-default-browser-check")
                     opts.add_argument("--disable-blink-features=AutomationControlled")
-                    # Detach: Chrome hoàn toàn độc lập — không bị kill khi tool đóng
+                    # detach=True: Chrome tồn tại độc lập, không bị kill khi tool đóng
                     opts.add_experimental_option("detach", True)
 
                     if px:
                         if px.startswith("socks5://"):
                             opts.add_argument(f"--proxy-server={px}")
                         else:
-                            ext_dir = w._make_proxy_extension(px) if hasattr(w, '_make_proxy_extension') else None
-                            if ext_dir:
-                                opts.add_argument(f"--load-extension={ext_dir}")
+                            ext_dir2 = w._make_proxy_extension(px) if hasattr(w, '_make_proxy_extension') else None
+                            if ext_dir2:
+                                opts.add_argument(f"--load-extension={ext_dir2}")
                             else:
                                 opts.add_argument(f"--proxy-server={px}")
 
+                    # Dừng Chrome headless — cùng profile, không thể chạy 2 Chrome cùng 1 profile
+                    try:
+                        w.driver.service.process.kill()
+                    except Exception:
+                        pass
+
+                    import time as _t
+                    _t.sleep(1.5)  # Chờ headless Chrome giải phóng profile lock
+
+                    # Mở Chrome thường với ĐÚNG profile đó — cùng session, cùng cookies
                     drv = wd.Chrome(service=CService(), options=opts)
-
-                    # Inject cookies đúng domain facebook.com
-                    drv.get("https://www.facebook.com")
-                    for ck in cks:
-                        try:
-                            ck2 = {k: v for k, v in ck.items() if k not in ("sameSite", "expiry")}
-                            drv.add_cookie(ck2)
-                        except Exception:
-                            pass
-
-                    # Navigate đến URL đích — đúng phiên đang chạy trong headless
                     drv.get(url)
-
-                    # Chrome ở lại cho user dùng tự do — tool không can thiệp nữa
-                    # detach=True đảm bảo Chrome tồn tại dù tool/chromedriver đóng
+                    # Chrome ở lại cho user — tool không can thiệp gì nữa
 
                 except Exception as ex:
-                    self._log_append(f"[Chrome] Open error: {ex}")
+                    # Fallback: inject cookies vào profile cố định
+                    try:
+                        from selenium import webdriver as wd2
+                        from selenium.webdriver.chrome.options import Options as COptions2
+                        from selenium.webdriver.chrome.service import Service as CService2
+                        opts2 = COptions2()
+                        opts2.add_argument(f"--user-data-dir={sdir}")
+                        opts2.add_argument("--no-first-run")
+                        opts2.add_experimental_option("detach", True)
+                        if px:
+                            if px.startswith("socks5://"):
+                                opts2.add_argument(f"--proxy-server={px}")
+                            else:
+                                e2 = w._make_proxy_extension(px) if hasattr(w, '_make_proxy_extension') else None
+                                if e2:
+                                    opts2.add_argument(f"--load-extension={e2}")
+                        drv2 = wd2.Chrome(service=CService2(), options=opts2)
+                        drv2.get("https://www.facebook.com")
+                        for ck in cks:
+                            try:
+                                ck2 = {k: v for k, v in ck.items() if k not in ("sameSite", "expiry")}
+                                drv2.add_cookie(ck2)
+                            except Exception:
+                                pass
+                        drv2.get(url)
+                    except Exception as ex2:
+                        self._log_append(f"[Chrome] Fallback error: {ex2}")
+                    self._log_append(f"[Chrome] Primary error: {ex}")
                 finally:
                     self._view_opening.discard(em)
 
-            threading.Thread(target=_open, daemon=False).start()
-            self._log_append(f"[Chrome] Opening: {email[:25]} proxy={proxy_str or 'none'} | profile saved")
+            threading.Thread(target=_show, daemon=False).start()
+            self._log_append(f"[Chrome] Showing session: {email[:25]}")
         except Exception as e:
             self._view_opening.discard(email)
             self._log_append(f"[Chrome] Error: {e}")
