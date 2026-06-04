@@ -1656,15 +1656,12 @@ class FBHackedRecoveryTool(tk.Tk):
                 self._results_window, width=e.width
             )
         )
-        # Mouse wheel scroll — bind_all + walk parent tree để check widget trong results_container
-        _rc_id = str(results_container)
-
+        # Mouse wheel scroll — bind_all + walk parent tree dùng widget identity
         def _scroll_results(e):
-            # Walk lên parent tree của widget nhận event
             w = e.widget
             try:
-                while w:
-                    if str(w) == _rc_id:
+                while w is not None:
+                    if w is results_container:
                         delta = e.delta
                         if delta == 0:
                             return
@@ -2327,18 +2324,19 @@ class FBHackedRecoveryTool(tk.Tk):
                 self._cb_thumbnail(email, b64)
 
     def _on_thumbnail_click(self, email: str):
-        """Bấm thumbnail → mở native WebView window (WKWebView on macOS) với session cookies."""
-        # Tìm worker có driver
+        """Bấm thumbnail → mở popup live screenshot của headless Chrome."""
+        # Tìm worker — có driver (đang chạy hoặc retry sleep)
         target_worker = None
         for w in self._workers:
             if w.email == email and w.driver:
                 target_worker = w
                 break
+        # Fallback: SUCCESS worker info
         if target_worker is None and email in self._success_worker_info:
             target_worker = self._success_worker_info[email].get("worker")
 
         if not (target_worker and target_worker.driver):
-            self._log_append(f"[View] No active session for {email[:25]}")
+            # Không spam log — chỉ show popup với thông báo nhẹ
             return
 
         w = target_worker
@@ -2370,11 +2368,11 @@ class FBHackedRecoveryTool(tk.Tk):
         popup = tk.Toplevel(self)
         popup.title(f"✅ {email}")
         popup.configure(bg="#1e1e2e")
-        # Popup vừa phải, căn giữa màn hình
+        # Popup cố định 900x620, căn giữa
         sw = popup.winfo_screenwidth()
         sh = popup.winfo_screenheight()
-        pw, ph = min(960, sw - 40), min(680, sh - 60)
-        px, py = (sw - pw) // 2, (sh - ph) // 2
+        pw, ph = 900, 620
+        px, py = (sw - pw) // 2, max(30, (sh - ph) // 2)
         popup.geometry(f"{pw}x{ph}+{px}+{py}")
         popup.resizable(True, True)
         self._success_popups[email] = popup
@@ -2505,10 +2503,13 @@ class FBHackedRecoveryTool(tk.Tk):
             if not _state["active"] or not popup.winfo_exists():
                 return
             _state["browser_w"], _state["browser_h"] = img.width, img.height
-            pw = max(img_frame.winfo_width() or sw, sw)
-            ph = max(img_frame.winfo_height() or sh - 80, sh - 80)
-            # Scale to fill the frame (up or down), preserve aspect ratio
-            ratio = min(pw / img.width, ph / img.height)
+            # Dùng kích thước thực của frame, fallback 860x520 (popup 900x620 trừ padding)
+            fw = img_frame.winfo_width()
+            fh = img_frame.winfo_height()
+            pw = fw if fw > 100 else 860
+            ph = fh if fh > 100 else 520
+            # Scale vừa khung, không phóng to hơn kích thước gốc
+            ratio = min(pw / img.width, ph / img.height, 1.0)
             nw, nh = int(img.width * ratio), int(img.height * ratio)
             img = img.resize((nw, nh), Image.LANCZOS)
             _state["disp_w"], _state["disp_h"] = img.width, img.height
