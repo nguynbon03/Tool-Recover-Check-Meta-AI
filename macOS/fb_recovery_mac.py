@@ -2077,20 +2077,7 @@ class FBHackedRecoveryTool(tk.Tk):
         self.after(0, _update)
 
     def _on_thumbnail_click(self, email: str):
-        """Bấm thumbnail → mở popup in-app với screenshot lớn, không mở Chrome ngoài."""
-        if not hasattr(self, '_success_popups'):
-            self._success_popups: dict = {}
-
-        # Nếu popup đang mở, focus lại
-        existing = self._success_popups.get(email)
-        if existing and existing.winfo_exists():
-            try:
-                existing.lift()
-                existing.focus_force()
-            except Exception:
-                pass
-            return
-
+        """Bấm thumbnail → mở native WebView window (WKWebView on macOS) với session cookies."""
         # Tìm worker có driver
         target_worker = None
         for w in self._workers:
@@ -2106,136 +2093,59 @@ class FBHackedRecoveryTool(tk.Tk):
 
         w = target_worker
 
-        # Tạo popup window trong app
-        popup = tk.Toplevel(self)
-        popup.title(f"✅ {email}")
-        popup.configure(bg="#1e1e2e")
-        popup.geometry("900x620")
-        popup.resizable(True, True)
-        self._success_popups[email] = popup
+        # Lấy cookies và URL hiện tại từ headless driver
+        try:
+            cookies = list(w.driver.get_cookies())
+        except Exception:
+            cookies = []
+        try:
+            current_url = w.driver.current_url
+        except Exception:
+            current_url = "https://www.facebook.com"
 
-        # URL bar
-        url_frame = tk.Frame(popup, bg="#181825", pady=4)
-        url_frame.pack(fill="x", padx=8)
-        tk.Label(url_frame, text="URL:", bg="#181825", fg="#6c7086",
-                 font=("Courier", 9)).pack(side="left")
-        url_var = tk.StringVar(value="Loading...")
-        url_lbl = tk.Label(url_frame, textvariable=url_var, bg="#181825", fg="#cdd6f4",
-                           font=("Courier", 9), anchor="w", wraplength=800)
-        url_lbl.pack(side="left", fill="x", expand=True)
-
-        # Screenshot display
-        img_frame = tk.Frame(popup, bg="#000000")
-        img_frame.pack(fill="both", expand=True, padx=8, pady=4)
-        img_lbl = tk.Label(img_frame, bg="#000000", cursor="arrow")
-        img_lbl.pack(fill="both", expand=True)
-        img_lbl.image = None
-
-        # Controls
-        ctrl_frame = tk.Frame(popup, bg="#1e1e2e", pady=4)
-        ctrl_frame.pack(fill="x", padx=8)
-
-        status_var = tk.StringVar(value="Live")
-        tk.Label(ctrl_frame, textvariable=status_var, bg="#1e1e2e", fg="#a6e3a1",
-                 font=("Courier", 9)).pack(side="left")
-
-        def _close():
-            try:
-                self._success_popups.pop(email, None)
-                popup.destroy()
-            except Exception:
-                pass
-
-        tk.Button(ctrl_frame, text="✕ Close", command=_close,
-                  bg="#f38ba8", fg="#1e1e2e", relief="flat",
-                  font=("Helvetica", 9, "bold"), padx=8).pack(side="right")
-
-        def _open_browser():
-            """Mở Chrome thật để tương tác — chỉ khi cần xử lý."""
-            import threading, tempfile
-            def _do():
+        def _open_webview(url=current_url, cks=cookies, em=email):
+            import threading
+            def _run():
                 try:
-                    from selenium import webdriver as wd
-                    from selenium.webdriver.chrome.options import Options as CO
-                    from selenium.webdriver.chrome.service import Service as CS
-                    vdir = tempfile.mkdtemp(prefix="fb_view_")
-                    opts = CO()
-                    opts.add_argument(f"--user-data-dir={vdir}")
-                    opts.add_argument("--no-first-run")
-                    opts.add_argument("--disable-blink-features=AutomationControlled")
-                    px = None
-                    if w._tunnel and w._tunnel._proc and w._tunnel._proc.poll() is None:
-                        px = w._tunnel.proxy_url()
-                    elif w.proxy:
-                        px = w.proxy
-                    if px:
-                        if px.startswith("socks5://"):
-                            opts.add_argument(f"--proxy-server={px}")
-                        else:
-                            ext = w._make_proxy_extension(px) if hasattr(w, '_make_proxy_extension') else None
-                            if ext:
-                                opts.add_argument(f"--load-extension={ext}")
-                            else:
-                                opts.add_argument(f"--proxy-server={px}")
-                    drv = wd.Chrome(service=CS(), options=opts)
-                    try:
-                        cks = list(w.driver.get_cookies()) if w.driver else []
-                    except Exception:
-                        cks = []
-                    drv.get("https://www.facebook.com")
-                    for ck in cks:
+                    import webview
+
+                    win = webview.create_window(
+                        f"✅ {em}",
+                        url="https://www.facebook.com",
+                        width=1200, height=800,
+                        resizable=True
+                    )
+
+                    def _inject_cookies():
+                        for ck in cks:
+                            name = ck.get('name', '')
+                            value = ck.get('value', '')
+                            domain = ck.get('domain', '')
+                            if name and value:
+                                try:
+                                    safe_name = name.replace("'", "\\'")
+                                    safe_value = value.replace("'", "\\'")
+                                    safe_domain = domain.replace("'", "\\'")
+                                    win.evaluate_js(
+                                        f"document.cookie='{safe_name}={safe_value}; domain={safe_domain}; path=/'"
+                                    )
+                                except Exception:
+                                    pass
+                        # Navigate đến URL đích sau khi inject cookies
                         try:
-                            ck2 = {k: v for k, v in ck.items() if k not in ("sameSite","expiry")}
-                            drv.add_cookie(ck2)
+                            win.load_url(url)
                         except Exception:
                             pass
-                    try:
-                        drv.get(w.driver.current_url if w.driver else "https://www.facebook.com")
-                    except Exception:
-                        pass
+
+                    win.events.loaded += lambda: _inject_cookies()
+                    webview.start()
                 except Exception as ex:
-                    self._log_append(f"[Browser] {ex}")
-            threading.Thread(target=_do, daemon=True).start()
+                    self._log_append(f"[WebView] Error: {ex}")
 
-        tk.Button(ctrl_frame, text="🌐 Open Browser", command=_open_browser,
-                  bg="#89b4fa", fg="#1e1e2e", relief="flat",
-                  font=("Helvetica", 9, "bold"), padx=8).pack(side="right", padx=(0,4))
+            threading.Thread(target=_run, daemon=True).start()
+            self._log_append(f"[WebView] Opening: {email[:25]}")
 
-        # Live screenshot refresh loop
-        _refresh_running = [True]
-
-        def _refresh():
-            if not _refresh_running[0] or not popup.winfo_exists():
-                return
-            try:
-                if w.driver:
-                    try:
-                        url_var.set(w.driver.current_url)
-                    except Exception:
-                        pass
-                    png = w.driver.get_screenshot_as_png()
-                    import io
-                    img = Image.open(io.BytesIO(png))
-                    # Fit to popup size
-                    pw = max(img_frame.winfo_width(), 860)
-                    ph = max(img_frame.winfo_height(), 480)
-                    img.thumbnail((pw, ph), Image.LANCZOS)
-                    photo = ImageTk.PhotoImage(img)
-                    img_lbl.configure(image=photo)
-                    img_lbl.image = photo
-                    status_var.set(f"Live  {img.width}×{img.height}")
-            except Exception as ex:
-                status_var.set(f"Err: {str(ex)[:40]}")
-            if _refresh_running[0] and popup.winfo_exists():
-                popup.after(1500, _refresh)
-
-        def _on_close_popup():
-            _refresh_running[0] = False
-            _close()
-
-        popup.protocol("WM_DELETE_WINDOW", _on_close_popup)
-        popup.after(100, _refresh)
-        self._log_append(f"[View] Opened popup for {email[:25]}")
+        _open_webview()
 
     # ------------------------------------------------------------------
     _STATE_FILE = os.path.expanduser("~/.fb_recovery_state.json")
