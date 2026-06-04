@@ -2115,7 +2115,7 @@ class FBHackedRecoveryTool(tk.Tk):
                     opts.add_argument("--no-default-browser-check")
                     opts.add_argument("--disable-blink-features=AutomationControlled")
                     # detach=True: Chrome tồn tại độc lập, không bị kill khi tool đóng
-                    opts.add_experimental_option("detach", True)
+                    # detach removed — dùng LSUIElement ẩn Dock icon thay thế
 
                     if px:
                         if px.startswith("socks5://"):
@@ -2181,7 +2181,7 @@ class FBHackedRecoveryTool(tk.Tk):
                         opts2 = COptions2()
                         opts2.add_argument(f"--user-data-dir={sdir}")
                         opts2.add_argument("--no-first-run")
-                        opts2.add_experimental_option("detach", True)
+                        # detach removed
                         if px:
                             if px.startswith("socks5://"):
                                 opts2.add_argument(f"--proxy-server={px}")
