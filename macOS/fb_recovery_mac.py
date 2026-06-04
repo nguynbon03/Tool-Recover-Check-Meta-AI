@@ -45,7 +45,8 @@ SUPPORT_JS = """
 // Detect support/chat button — CHỈ match text chính xác, không fallback button chung
 const textTargets = ["nhận hỗ trợ","get support","contact support",
                      "liên hệ hỗ trợ","chat với ai","chat with ai",
-                     "meta ai support","hỗ trợ qua chat","support assistant"];
+                     "meta ai support","hỗ trợ qua chat","support assistant",
+                     "meta ai support assistant"];
 const els = document.querySelectorAll(
     "button,a,div[role='button'],span[role='button']"
 );
@@ -2252,6 +2253,11 @@ class FBHackedRecoveryTool(tk.Tk):
         self.after(100, self._update_stats)
         # Telegram notification
         threading.Thread(target=lambda: self._telegram_notify(email), daemon=True).start()
+        # Mở Chrome visible ngay khi SUCCESS — không cần click thumbnail
+        for w in self._workers:
+            if w.email == email:
+                self._open_visible_chrome(email, w)
+                break
 
     def _cb_thumbnail(self, email: str, b64_data: str):
         if not HAS_PIL:
