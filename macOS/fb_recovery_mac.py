@@ -2150,6 +2150,57 @@ class FBHackedRecoveryTool(tk.Tk):
                   bg="#f38ba8", fg="#1e1e2e", relief="flat",
                   font=("Helvetica", 9, "bold"), padx=8).pack(side="right")
 
+        def _open_browser():
+            """Mở Chrome thật để tương tác — chỉ khi cần xử lý."""
+            import threading, tempfile
+            def _do():
+                try:
+                    from selenium import webdriver as wd
+                    from selenium.webdriver.chrome.options import Options as CO
+                    from selenium.webdriver.chrome.service import Service as CS
+                    vdir = tempfile.mkdtemp(prefix="fb_view_")
+                    opts = CO()
+                    opts.add_argument(f"--user-data-dir={vdir}")
+                    opts.add_argument("--no-first-run")
+                    opts.add_argument("--disable-blink-features=AutomationControlled")
+                    px = None
+                    if w._tunnel and w._tunnel._proc and w._tunnel._proc.poll() is None:
+                        px = w._tunnel.proxy_url()
+                    elif w.proxy:
+                        px = w.proxy
+                    if px:
+                        if px.startswith("socks5://"):
+                            opts.add_argument(f"--proxy-server={px}")
+                        else:
+                            ext = w._make_proxy_extension(px) if hasattr(w, '_make_proxy_extension') else None
+                            if ext:
+                                opts.add_argument(f"--load-extension={ext}")
+                            else:
+                                opts.add_argument(f"--proxy-server={px}")
+                    drv = wd.Chrome(service=CS(), options=opts)
+                    try:
+                        cks = list(w.driver.get_cookies()) if w.driver else []
+                    except Exception:
+                        cks = []
+                    drv.get("https://www.facebook.com")
+                    for ck in cks:
+                        try:
+                            ck2 = {k: v for k, v in ck.items() if k not in ("sameSite","expiry")}
+                            drv.add_cookie(ck2)
+                        except Exception:
+                            pass
+                    try:
+                        drv.get(w.driver.current_url if w.driver else "https://www.facebook.com")
+                    except Exception:
+                        pass
+                except Exception as ex:
+                    self._log_append(f"[Browser] {ex}")
+            threading.Thread(target=_do, daemon=True).start()
+
+        tk.Button(ctrl_frame, text="🌐 Open Browser", command=_open_browser,
+                  bg="#89b4fa", fg="#1e1e2e", relief="flat",
+                  font=("Helvetica", 9, "bold"), padx=8).pack(side="right", padx=(0,4))
+
         # Live screenshot refresh loop
         _refresh_running = [True]
 
