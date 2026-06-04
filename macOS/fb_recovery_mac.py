@@ -2305,18 +2305,8 @@ class FBHackedRecoveryTool(tk.Tk):
 
         w = target_worker
 
-        # Lấy cookies và URL hiện tại từ headless driver
-        try:
-            cookies = list(w.driver.get_cookies())
-        except Exception:
-            cookies = []
-        try:
-            current_url = w.driver.current_url
-        except Exception:
-            current_url = "https://www.facebook.com"
-
-        # Mở popup in-app với screenshot live từ headless driver
-        self.after(0, lambda: self._open_success_popup(email, w))
+        # Click thumbnail → mở Chrome visible ngay, tương tác trực tiếp
+        self._open_visible_chrome(email, w)
 
     # ------------------------------------------------------------------
     def _open_retry_info_popup(self, email: str, worker):
@@ -2343,6 +2333,72 @@ class FBHackedRecoveryTool(tk.Tk):
         tk.Button(popup, text="Đóng", command=popup.destroy,
                   bg="#313244", fg="#cdd6f4", relief="flat",
                   font=("Courier", 9), padx=12).pack(pady=(12, 0))
+
+    # ------------------------------------------------------------------
+    def _open_visible_chrome(self, email: str, worker, callback=None):
+        """Mở Chrome visible với cookies + proxy từ headless session.
+        Không phụ thuộc popup — có thể gọi độc lập từ thumbnail click.
+        """
+        def _do():
+            try:
+                drv = worker.driver
+                if not drv:
+                    if callback:
+                        self.after(0, lambda: callback("⚠ No active session"))
+                    return
+                if callback:
+                    self.after(0, lambda: callback("⏳ Opening Chrome..."))
+                cur_url = drv.current_url
+                cookies = drv.get_cookies()
+
+                # Chrome visible — default size (không set window-size, để Chrome tự quyết)
+                vis_options = Options()
+                vis_options.add_argument(f"user-agent={DESKTOP_UA}")
+                vis_options.add_argument("--disable-blink-features=AutomationControlled")
+                vis_options.add_argument("--lang=en-US")
+                vis_options.add_argument("--no-first-run")
+                vis_options.add_argument("--no-default-browser-check")
+                vis_options.add_argument("--disable-notifications")
+                vis_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                vis_options.add_experimental_option("useAutomationExtension", False)
+
+                # Proxy giống headless
+                _vis_proxy_ext_dir = None
+                try:
+                    if worker._tunnel and worker._tunnel._proc and worker._tunnel._proc.poll() is None:
+                        turl = worker._tunnel.proxy_url()
+                        if turl:
+                            vis_options.add_argument(f"--proxy-server={turl}")
+                    elif worker.proxy:
+                        _vis_proxy_ext_dir = worker._make_proxy_extension(worker.proxy)
+                        if _vis_proxy_ext_dir:
+                            vis_options.add_argument(f"--load-extension={_vis_proxy_ext_dir}")
+                        else:
+                            vis_options.add_argument(f"--proxy-server={worker.proxy}")
+                except Exception:
+                    pass
+
+                vis_drv = webdriver.Chrome(service=Service(), options=vis_options)
+                # Inject cookies
+                vis_drv.get("https://www.facebook.com/")
+                time.sleep(2)
+                for c in cookies:
+                    try:
+                        c.pop("sameSite", None)
+                        vis_drv.add_cookie(c)
+                    except Exception:
+                        pass
+                vis_drv.get(cur_url)
+
+                with self._lock:
+                    self._view_drivers[email] = vis_drv
+
+                if callback:
+                    self.after(0, lambda: callback(f"✅ Chrome opened: {cur_url[:50]}"))
+            except Exception as ex:
+                if callback:
+                    self.after(0, lambda e=ex: callback(f"Open Chrome failed: {e}"))
+        threading.Thread(target=_do, daemon=True).start()
 
     # ------------------------------------------------------------------
     def _open_success_popup(self, email: str, worker):
