@@ -1028,6 +1028,8 @@ chrome.webRequest.onAuthRequired.addListener(
     # ------------------------------------------------------------------
     def _check_support_button(self) -> bool:
         driver = self.driver
+        if not driver:
+            return False
         try:
             result = driver.execute_script(SUPPORT_JS)
             if result:
