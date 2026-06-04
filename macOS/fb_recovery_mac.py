@@ -2094,16 +2094,45 @@ class FBHackedRecoveryTool(tk.Tk):
                             else:
                                 opts.add_argument(f"--proxy-server={px}")
 
-                    # Dừng Chrome headless — cùng profile, không thể chạy 2 Chrome cùng 1 profile
+                    # Kill toàn bộ Chrome headless + chromedriver — giải phóng profile lock
+                    import time as _t, signal as _sig
+                    killed_pids = []
+                    try:
+                        # Tìm Chrome child process của chromedriver
+                        drv_pid = w.driver.service.process.pid
+                        r2 = subprocess.run(["pgrep", "-P", str(drv_pid)], capture_output=True, text=True)
+                        for cpid in r2.stdout.strip().split():
+                            if cpid:
+                                try:
+                                    subprocess.run(["kill", "-9", cpid], capture_output=True)
+                                    killed_pids.append(cpid)
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
                     try:
                         w.driver.service.process.kill()
                     except Exception:
                         pass
+                    # Đặt driver=None để worker không dùng nữa
+                    try:
+                        w.driver = None
+                    except Exception:
+                        pass
 
-                    import time as _t
-                    _t.sleep(1.5)  # Chờ headless Chrome giải phóng profile lock
+                    # Chờ Chrome headless chết hoàn toàn và giải phóng SingletonLock
+                    _t.sleep(2.0)
 
-                    # Mở Chrome thường với ĐÚNG profile đó — cùng session, cùng cookies
+                    # Xóa SingletonLock/Socket nếu còn sót lại
+                    for lock_f in ["SingletonLock", "SingletonSocket", "SingletonCookie"]:
+                        lp = os.path.join(use_dir, lock_f)
+                        try:
+                            if os.path.exists(lp):
+                                os.remove(lp)
+                        except Exception:
+                            pass
+
+                    # Mở Chrome thường với ĐÚNG profile đó — 1 Chrome duy nhất
                     drv = wd.Chrome(service=CService(), options=opts)
                     drv.get(url)
                     # Chrome ở lại cho user — tool không can thiệp gì nữa
