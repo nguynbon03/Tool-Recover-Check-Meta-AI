@@ -1265,6 +1265,8 @@ class FBHackedRecoveryTool(tk.Tk):
             "# Nhap email/phone moi dong\n"
             "# Lines bat dau # se bi bo qua\n",
         )
+        # Sync results khi accounts thay đổi
+        self.accounts_text.bind("<<Modified>>", self._on_accounts_modified)
 
         # Vertical separator
         vsep1 = tk.Frame(input_row, bg="#313244", width=1)
@@ -1766,6 +1768,43 @@ class FBHackedRecoveryTool(tk.Tk):
                 continue
             accounts.append(line)
         return accounts
+
+    def _on_accounts_modified(self, event=None):
+        """Khi accounts textarea thay đổi → xóa result rows của emails không còn trong list.
+        Giữ nguyên SUCCESS rows chỉ khi email đó vẫn còn trong accounts."""
+        # Reset modified flag để event có thể fire lại
+        try:
+            self.accounts_text.edit_modified(False)
+        except Exception:
+            pass
+        current = set(self._parse_accounts())
+        # Tìm emails đã bị xóa khỏi accounts
+        rows_to_remove = [em for em in list(self._result_rows.keys()) if em not in current]
+        for em in rows_to_remove:
+            # Xóa result row widget
+            row_data = self._result_rows.pop(em, None)
+            if row_data:
+                try:
+                    row_data[0].master.destroy()  # destroy Frame chứa row
+                except Exception:
+                    pass
+            # Nếu là SUCCESS, kill driver và cleanup
+            if em in self._success_emails:
+                old_w = self._success_worker_info.get(em, {}).get("worker")
+                if old_w:
+                    try: old_w._stop.set()
+                    except Exception: pass
+                    try: old_w._safe_quit()
+                    except Exception: pass
+                self._success_emails.discard(em)
+                self._success_worker_info.pop(em, None)
+                if hasattr(self, '_success_popups'):
+                    p = self._success_popups.pop(em, None)
+                    if p:
+                        try: p.destroy()
+                        except Exception: pass
+        if rows_to_remove:
+            self.after(100, self._update_stats)
 
     def _parse_proxies(self) -> str:
         raw = self.proxy_entry.get("1.0", "end").strip()
