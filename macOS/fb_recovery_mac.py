@@ -1778,7 +1778,8 @@ class FBHackedRecoveryTool(tk.Tk):
         def _on_enter_log(e):
             self.unbind_all("<MouseWheel>")
         def _on_leave_log(e):
-            pass  # results sẽ tự bind lại khi chuột vào
+            # Rebind lại để results scroll hoạt động sau khi rời log box
+            self.bind_all("<MouseWheel>", _scroll_results)
         self.log_box.bind("<Enter>", _on_enter_log)
         self.log_box.bind("<Leave>", _on_leave_log)
 
@@ -2342,7 +2343,9 @@ class FBHackedRecoveryTool(tk.Tk):
             target_worker = self._success_worker_info[email].get("worker")
 
         if not (target_worker and target_worker.driver):
-            # Không spam log — chỉ show popup với thông báo nhẹ
+            # Worker tồn tại nhưng đang trong RETRY sleep (driver bị quit tạm)
+            if target_worker:
+                self.after(0, lambda: self._open_retry_info_popup(email, target_worker))
             return
 
         w = target_worker
@@ -2359,6 +2362,32 @@ class FBHackedRecoveryTool(tk.Tk):
 
         # Mở popup in-app với screenshot live từ headless driver
         self.after(0, lambda: self._open_success_popup(email, w))
+
+    # ------------------------------------------------------------------
+    def _open_retry_info_popup(self, email: str, worker):
+        """Popup thông báo khi account đang trong RETRY sleep (driver tạm ngừng)."""
+        popup = tk.Toplevel(self)
+        popup.title(f"⏳ {email}")
+        popup.configure(bg="#1e1e2e")
+        sw = popup.winfo_screenwidth()
+        sh = popup.winfo_screenheight()
+        pw, ph = 420, 180
+        px, py = (sw - pw) // 2, max(30, (sh - ph) // 2)
+        popup.geometry(f"{pw}x{ph}+{px}+{py}")
+        popup.resizable(False, False)
+        popup.lift()
+        popup.focus_force()
+
+        tk.Label(popup, text="⏳", font=("Courier", 32), bg="#1e1e2e", fg="#fab387").pack(pady=(20, 4))
+        tk.Label(popup, text=f"{email[:40]}", font=("Courier", 10, "bold"), bg="#1e1e2e", fg="#cdd6f4").pack()
+        tk.Label(popup, text="Đang chờ retry — trình duyệt tạm nghỉ.",
+                 font=("Courier", 9), bg="#1e1e2e", fg="#6c7086").pack(pady=(4, 2))
+        _att = getattr(worker, '_attempt', '?')
+        tk.Label(popup, text=f"Lần thử tiếp theo: #{_att}",
+                 font=("Courier", 9), bg="#1e1e2e", fg="#89b4fa").pack()
+        tk.Button(popup, text="Đóng", command=popup.destroy,
+                  bg="#313244", fg="#cdd6f4", relief="flat",
+                  font=("Courier", 9), padx=12).pack(pady=(12, 0))
 
     # ------------------------------------------------------------------
     def _open_success_popup(self, email: str, worker):
