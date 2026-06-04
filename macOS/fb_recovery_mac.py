@@ -1080,8 +1080,6 @@ class FBHackedRecoveryTool(tk.Tk):
         self._build_ui()
         self._load_state()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        # Kill Chrome view cũ còn sót từ session trước (detach=True)
-        self._kill_stale_view_chromes()
 
     # ------------------------------------------------------------------
     def _kill_stale_view_chromes(self):
