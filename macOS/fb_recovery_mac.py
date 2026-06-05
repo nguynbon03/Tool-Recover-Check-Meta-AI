@@ -1336,6 +1336,13 @@ class FBHackedRecoveryTool(tk.Tk):
         self.btn_start = ttk.Button(btn_frame, text="START", command=self.start_threads)
         self.btn_start.pack(side="right", padx=(0, 4))
 
+        tk.Button(btn_frame, text="Clear Log", command=self.clear_log,
+                  bg="#313244", fg="#89b4fa", relief="flat",
+                  font=("Helvetica", 9), padx=6).pack(side="right", padx=(2, 2))
+        tk.Button(btn_frame, text="Clear Results", command=self.clear_results,
+                  bg="#313244", fg="#f38ba8", relief="flat",
+                  font=("Helvetica", 9), padx=6).pack(side="right", padx=(2, 2))
+
         # Separator
         sep = tk.Frame(self, bg="#313244", height=1)
         sep.pack(fill="x")
@@ -2174,12 +2181,10 @@ class FBHackedRecoveryTool(tk.Tk):
         )
         lbl.pack(side="right")
 
-        # Thumbnail — hiện screenshot nhỏ, click để mở popup full
-        thumb_lbl = tk.Label(row, bg="#181825", width=20, height=5, cursor="hand2")
-        thumb_lbl.pack(side="right", padx=(0, 4))
-        thumb_lbl.bind("<Button-1>", lambda e, em=email: self._on_thumbnail_click(em))
-
-        self._result_rows[email] = (lbl, icon_lbl, thumb_lbl)
+        self._result_rows[email] = (lbl, icon_lbl)
+        row.bind("<Button-1>", lambda e, em=email: self._on_row_click(em))
+        for c in row.winfo_children():
+            c.bind("<Button-1>", lambda e, em=email: self._on_row_click(em))
 
     def _update_result_row(self, email: str, status: str):
         entry = self._result_rows.get(email)
@@ -2236,6 +2241,33 @@ class FBHackedRecoveryTool(tk.Tk):
                 self.after(0, lambda e=ex: self._log_append(f"[TG] Failed: {e}"))
         threading.Thread(target=_send, daemon=True).start()
 
+    def clear_results(self):
+        """Reset: stop TẤT CẢ kể cả SUCCESS, xóa results, cho chạy lại từ đầu."""
+        self._log_append("[CLEAR] Stopping ALL workers including SUCCESS...")
+        self._loop_active = False
+        self._loop_stop.set()
+        for w in list(self._workers):
+            w._stop.set()
+            try:
+                w._safe_quit()
+            except Exception:
+                pass
+        self._workers.clear()
+        self._success_emails.clear()
+        self._success_worker_info.clear()
+        if hasattr(self, '_view_drivers'):
+            self._view_drivers.clear()
+        for widget in self.results_frame.winfo_children():
+            widget.destroy()
+        self._result_rows.clear()
+        self._update_stats()
+        self._log_append("[CLEAR] Done. All reset. Press START to run.")
+
+    def clear_log(self):
+        self.log_box.configure(state="normal")
+        self.log_box.delete("1.0", "end")
+        self.log_box.configure(state="disabled")
+
     def _cb_success_keep(self, email: str):
         self._success_emails.add(email)  # track để stop_all không đóng Chrome này
         # Lưu worker info để dùng khi click thumbnail sau STOP
@@ -2291,28 +2323,17 @@ class FBHackedRecoveryTool(tk.Tk):
             if b64:
                 self._cb_thumbnail(email, b64)
 
-    def _on_thumbnail_click(self, email: str):
-        """Bấm thumbnail → mở popup live screenshot của headless Chrome."""
-        # Tìm worker — có driver (đang chạy hoặc retry sleep)
+    def _on_row_click(self, email: str):
+        """Click row → đưa Chrome window vào màn hình (không mở Chrome mới)."""
         target_worker = None
         for w in self._workers:
             if w.email == email and w.driver:
                 target_worker = w
                 break
-        # Fallback: SUCCESS worker info
         if target_worker is None and email in self._success_worker_info:
             target_worker = self._success_worker_info[email].get("worker")
-
-        if not (target_worker and target_worker.driver):
-            # Worker tồn tại nhưng đang trong RETRY sleep (driver bị quit tạm)
-            if target_worker:
-                self.after(0, lambda: self._open_retry_info_popup(email, target_worker))
-            return
-
-        w = target_worker
-
-        # Click thumbnail → mở Chrome visible ngay, tương tác trực tiếp
-        self._open_visible_chrome(email, w)
+        if target_worker and target_worker.driver:
+            target_worker._show_window()
 
     # ------------------------------------------------------------------
     def _open_retry_info_popup(self, email: str, worker):
