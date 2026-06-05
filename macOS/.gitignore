@@ -1,0 +1,13 @@
+# Claude
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Process workspace
+process/

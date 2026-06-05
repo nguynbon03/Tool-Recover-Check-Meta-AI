@@ -42,13 +42,13 @@ RECOVERY_URL = (
 )
 
 SUPPORT_JS = """
-// Detect support/chat button — CHỈ match text chính xác, không fallback button chung
+// Detect support/chat button — text match OR bottom-right floating widget
 const textTargets = ["nhận hỗ trợ","get support","contact support",
                      "liên hệ hỗ trợ","chat với ai","chat with ai",
                      "meta ai support","hỗ trợ qua chat","support assistant",
                      "meta ai support assistant"];
 const els = document.querySelectorAll(
-    "button,a,div[role='button'],span[role='button']"
+    "button,a,div[role='button'],span[role='button'],div"
 );
 for (const el of els) {
     const txt = (el.innerText || el.getAttribute('aria-label') || '').trim();
@@ -61,6 +61,25 @@ for (const el of els) {
     const low = txt.toLowerCase();
     for (const t of textTargets) {
         if (low.includes(t)) return txt;
+    }
+}
+
+// Bottom-right floating widget detection — góc dưới phải xuất hiện chat/support widget = SUCCESS
+const vw = window.innerWidth, vh = window.innerHeight;
+const widgets = document.querySelectorAll('div,iframe,[class*="chat"],[class*="support"],[class*="assistant"],[class*="messenger"],[class*="bubble"]');
+for (const el of widgets) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 80 || rect.height < 40) continue;
+    if (rect.width > 600 || rect.height > 500) continue;
+    const inBottomRight = rect.left >= vw - 350 && rect.top >= vh - 280;
+    if (!inBottomRight) continue;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) < 0.3) continue;
+    const txt = (el.innerText || el.getAttribute('aria-label') || '').trim();
+    const hasChatWord = /support|assistant|chat|hỗ trợ|trợ lý/i.test(txt);
+    const hasChatClass = /chat|support|assistant|messenger|bubble/i.test(el.className + ' ' + (el.getAttribute('role')||''));
+    if ((txt && hasChatWord) || hasChatClass) {
+        return `widget:${txt.slice(0,50)}`;
     }
 }
 return null;
@@ -545,10 +564,10 @@ class AccountWorker(threading.Thread):
         fp = FingerprintProfile(self.email).generate()
         options.add_argument(f"user-agent={DESKTOP_UA}")
         options.add_argument("--window-size=1280,900")
-        # Off-screen: Chrome chạy ngoài màn hình
-        options.add_argument("--window-position=10000,0")
-        # headless=new — ẩn hoàn toàn, thumbnail vẫn hoạt động qua CDP screenshot
-        options.add_argument("--headless=new")
+        # Chrome VISIBLE — stagger windows so 5 threads don't perfectly overlap
+        off_x = (self.idx % 3) * 120
+        off_y = (self.idx // 3) * 80
+        options.add_argument(f"--window-position={off_x},{off_y}")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_argument("--lang=en-US")
         options.add_argument("--no-first-run")
@@ -2285,10 +2304,10 @@ class FBHackedRecoveryTool(tk.Tk):
         self.after(100, self._update_stats)
         # Telegram notification
         threading.Thread(target=lambda: self._telegram_notify(email), daemon=True).start()
-        # Mở Chrome visible ngay khi SUCCESS — không cần click thumbnail
+        # Bring existing visible Chrome to front — no duplicate window needed
         for w in self._workers:
             if w.email == email:
-                self._open_visible_chrome(email, w)
+                w._show_window()
                 break
 
     def _cb_thumbnail(self, email: str, b64_data: str):
